@@ -1,8 +1,9 @@
 import os as _os, pathlib as _pl
 ROOT = _pl.Path(__file__).resolve().parents[1]
 WORK = _pl.Path(_os.environ.get('ATC_WORK', ROOT / '.work'))
-import asyncio, json, sys, threading, functools, http.server
+import asyncio, json, re, sys, threading, functools, http.server
 from playwright.async_api import async_playwright
+MODELS = WORK / 'models'  # pinned Whisper files fetched by tools/asr_eval/browser.js; the ASR end-to-end check needs tiny.en
 
 
 def serve_docs():
@@ -89,8 +90,15 @@ PARSE_JS = r'''() => {
 
 async def main():
     async with async_playwright() as p:
-        b = await p.chromium.launch()
-        ctx = await b.new_context(viewport={'width': 1194, 'height': 834}, device_scale_factor=2, has_touch=True)
+        # fake microphone (a beep) so push-to-talk capture runs headless; permission granted without a prompt
+        b = await p.chromium.launch(args=['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
+        ctx = await b.new_context(viewport={'width': 1194, 'height': 834}, device_scale_factor=2, has_touch=True, permissions=['microphone'])
+        async def hf_route(route):  # model downloads from the hub are served from .work/models (no network in tests)
+            m = re.match(r'^https://huggingface\.co/(.+?)/resolve/([^/]+)/([^?]+)', route.request.url)
+            f = MODELS / m.group(1) / m.group(3) if m else None
+            if f and f.exists(): await route.fulfill(status=200, path=str(f), headers={'access-control-allow-origin': '*'})
+            else: await route.fulfill(status=404, body='not found')
+        await ctx.route('https://huggingface.co/**', hf_route)
         page = await ctx.new_page()
         errs = []
         page.on('pageerror', lambda e: errs.append(str(e)))
@@ -194,7 +202,48 @@ async def main():
         await page.mouse.move(src['x'], src['y']); await page.mouse.down(); await page.mouse.move(src['tx'], src['ty'], steps=10); await page.mouse.up(); await page.wait_for_timeout(200)
         col = await page.evaluate("(() => { const s=[...document.querySelectorAll('.strip')].find(e=>e.textContent.includes('RYR5TR')); return s.parentElement.getAttribute('data-col'); })()")
         check('Strip moved to GROUND with mouse', col == 'gnd', col)
-        txt = await page.evaluate("App.resultText()"); check('Result text builds', 'ATC Ruzyně' in txt and '[1] Radar APP' in txt)
+        # ---------- voice control: parser + radio policy (no speech recognition needed) ----------
+        await page.evaluate("App.show('voice')"); await page.wait_for_timeout(300)
+        VOICE_JS = '''(txt) => { const n0 = App.comms.entries.length; Voice.handle({ text: txt, wall: 1 }, Voice.onFreq(), 2.0);
+          for (let i = 0; i < 40; i++) { App.sim.step(0.1); App.comms.tick(); }
+          return { outcome: Voice.last.outcome, log: App.comms.entries.slice(n0).map(e => e.who + ': ' + e.text + (e.note ? ' ' + e.note : '')) }; }'''
+        r = await page.evaluate(VOICE_JS, 'Skytravel three five Juliett, turn left heading two seven zero, descend flight level eight zero')
+        st = await page.evaluate("(() => { const a = App.sim.find('TVS35J'); return {hdg: Math.round(toMag(a.tgtHdg)), alt: a.tgtAlt}; })()")
+        check('Voice: instruction executed after readback', r['outcome'] == 'TVS35J L270 FL080' and st == {'hdg': 270, 'alt': 8000} and any(l.startswith('plt:') for l in r['log']), (r, st))
+        r = await page.evaluate(VOICE_JS, 'Skytravel three five Juliett, banana split please')
+        check('Voice: unclear instruction -> pilot says again', r['outcome'] == 'TVS35J SAY AGAIN' and any('say again, Skytravel 35J' in l for l in r['log']), r)
+        await page.evaluate("App.sim.add({cs: 'TVS35K', type: 'A320', kind: 'arr', x: 5, y: 20, alt: 9000, hdg: 180, ias: 250, ctl: 'own'})")
+        r = await page.evaluate(VOICE_JS, 'Skytravel three five, descend flight level seven zero')
+        check('Voice: ambiguous callsign -> say again', 'CALLSIGN' in r['outcome'] and any(l == 'plt: Praha Radar, say again' for l in r['log']), r)
+        await page.evaluate("App.sim.ac = App.sim.ac.filter(a => a.cs !== 'TVS35K')")
+        r = await page.evaluate(VOICE_JS, 'descend flight level seven zero, reduce speed two two zero knots')
+        check('Voice: no callsign -> say again', r['outcome'] == 'CALLSIGN ?' and any('say again' in l for l in r['log']), r)
+        r = await page.evaluate(VOICE_JS, '')
+        check('Voice: empty transcript is ignored', r['outcome'] == 'NO SPEECH' and not r['log'], r)
+        # ---------- push-to-talk: Space holds the frequency, fake microphone is captured, P pauses ----------
+        await page.evaluate("ASR.setPref('model', 'tiny.en'); ASR.setPref('device', 'wasm')")
+        await page.mouse.click(400, 300); b0 = await page.evaluate("Mic.diag.blocks"); await page.keyboard.down('Space'); await page.wait_for_timeout(400)
+        # a pilot call that falls due while the controller transmits must wait (the frame loop keeps ticking meanwhile)
+        await page.evaluate("window.__n0 = App.comms.entries.length; App.comms.pilot(App.sim.ac[0], 'test call, frequency was busy', 'test call', 0)"); await page.wait_for_timeout(500)
+        held = await page.evaluate("(() => { for (let i = 0; i < 5; i++) { App.sim.step(0.1); App.comms.tick(); } return {phase: Voice.phase, atcTx: App.comms.atcTx, logged: App.comms.entries.slice(window.__n0).map(e => e.text), paused: App.paused}; })()")
+        await page.keyboard.up('Space'); await page.wait_for_timeout(300)
+        after = await page.evaluate("(() => { for (let i = 0; i < 5; i++) { App.sim.step(0.1); App.comms.tick(); } return {atcTx: App.comms.atcTx, blocks: Mic.diag.blocks, rate: Mic.diag.rate, open: Mic.open, tx: Voice.stats.tx, calls: App.comms.entries.slice(window.__n0).map(e => e.text)}; })()")
+        after['sec'] = round((after['blocks'] - b0) * 2048 / max(1, after['rate']), 2)  # headless audio timing is unreliable under load: only require some audio
+        check('PTT (Space) transmits and holds the frequency', held['phase'] == 'tx' and held['atcTx'] and not held['logged'] and not held['paused'], held)
+        check('PTT release frees the frequency, microphone captured and closed', not after['atcTx'] and after['sec'] > 0 and not after['open'] and after['tx'] >= 1 and any(c.startswith('test call') for c in after['calls']), after)
+        await page.evaluate("App.comms.speaking = true"); await page.keyboard.down('Space'); await page.wait_for_timeout(500); await page.keyboard.up('Space'); await page.wait_for_timeout(300)
+        bl = await page.evaluate("(() => { App.comms.speaking = false; return {blocked: Voice.stats.blocked, last: App.comms.entries.slice(-1)[0].text}; })()")
+        check('PTT over a pilot transmission is blocked', bl['blocked'] == 1 and bl['last'].startswith('BLOCKED'), bl)
+        p0 = await page.evaluate("App.paused"); await page.keyboard.press('p'); p1 = await page.evaluate("App.paused"); await page.keyboard.press('p')
+        check('Key P toggles pause (Space is PTT)', p0 is False and p1 is True, (p0, p1))
+        # ---------- speech recognition end to end: voice pack -> Whisper tiny.en (WASM) -> parser -> readback ----------
+        if (MODELS / 'onnx-community/whisper-tiny.en/onnx/decoder_model_merged_quantized.onnx').exists():
+            sr = await page.evaluate("(async () => { try { await ASR.load(); const r = await Voice.selfTest('AFR1083'); for (let i = 0; i < 40; i++) { App.sim.step(0.1); App.comms.tick(); } return {...r, dev: ASR.device, err: null}; } catch (e) { return {err: e.message}; } })()")
+            check('ASR self-test (tiny.en WASM) recognises the instruction', not sr.get('err') and sr.get('got') == sr.get('expect'), sr)
+        else:
+            print('SKIP ASR self-test: no local model (node tools/asr_eval/browser.js tiny.en gb --limit 1 downloads it)')
+        await page.screenshot(path=f'{WORK}/shots/04_voice.png')
+        txt = await page.evaluate("App.resultText()"); check('Result text builds', 'ATC Ruzyně' in txt and '[1] Radar APP' in txt and 'Hlasové ovládání: model' in txt)
         print('\n'.join(txt.split('\n')[:8]))
         print('ERRORS:', errs[:10])
         check('No page errors', len(errs) == 0, errs[:3])

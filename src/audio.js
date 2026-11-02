@@ -34,7 +34,9 @@ const Sound = {
   /* Must run inside a user gesture (touchend, click, keydown). Safe to call repeatedly. */
   unlock() {
     this.wanted = true; this.diag.unlocks++;
-    try { if (navigator.audioSession) { if (navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; this.diag.session = navigator.audioSession.type; } else this.diag.session = 'nepodporováno'; } catch (e) { this.diag.session = 'chyba'; }
+    // while the microphone is open (push-to-talk) the session must stay 'play-and-record' (see Mic in voice.js)
+    const type = typeof Mic !== 'undefined' && Mic.capturing ? 'play-and-record' : 'playback';
+    try { if (navigator.audioSession) { if (navigator.audioSession.type !== type) navigator.audioSession.type = type; this.diag.session = navigator.audioSession.type; } else this.diag.session = 'nepodporováno'; } catch (e) { this.diag.session = 'chyba'; }
     const c = this.ensureCtx();
     if (c) {
       if (c.state !== 'running') { this.diag.resumes++; try { const p = c.resume(); if (p && p.then) p.then(() => App.emit('audio'), () => { this.diag.resumeFails++; App.emit('audio'); }); } catch (e) { this.diag.resumeFails++; } }
