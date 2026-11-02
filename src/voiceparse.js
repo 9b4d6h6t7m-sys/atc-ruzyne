@@ -186,8 +186,8 @@ const VoiceParser = (() => {
   const PROMPT_TEL = { AIRFRANS: 'Air France', KLM: 'KLM', LOT: 'LOT', CSA: 'CSA', TOPSWISS: 'Top Swiss' };
   const telWritten = (cs) => { const al = AIRLINES[cs.slice(0, 3)]; if (!al) return cs.slice(0, 3); return PROMPT_TEL[al.tel] || al.tel.split(' ').map(w => w[0] + w.slice(1).toLowerCase()).join(' '); };
   function prompt(aircraft, opts = {}) {
-    const calls = aircraft.slice(0, 12).map(a => `${telWritten(a.cs)} ${a.cs.slice(3)}`);
-    const fixes = [...new Set([...(opts.fixes || []), ...aircraft.flatMap(a => (a.route || []).slice(a.routeIdx || 0))])].filter(f => FIX[f] && f.length === 5).slice(0, 10).map(f => f[0] + f.slice(1).toLowerCase());
+    const calls = aircraft.slice(0, 10).map(a => `${telWritten(a.cs)} ${a.cs.slice(3)}`); // with 8 fixes about 110 tokens
+    const fixes = [...new Set([...(opts.fixes || []), ...aircraft.flatMap(a => (a.route || []).slice(a.routeIdx || 0))])].filter(f => FIX[f] && f.length === 5).slice(0, 8).map(f => f[0] + f.slice(1).toLowerCase());
     return `Praha Radar, ${calls.join(', ')}. Descend flight level, turn left heading, reduce speed, cleared ILS approach runway ${opts.rwy || '24'}${fixes.length ? ', direct ' + fixes.join(', ') : ''}, contact Ruzyne Tower.`;
   }
   return { parse, tokens, phon, sim, readDigits, callsign, instructions, prompt };

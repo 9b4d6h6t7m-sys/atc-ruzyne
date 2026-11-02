@@ -51,12 +51,13 @@ async function load(o) {
 }
 
 /* Whisper decoder prompt: <|startofprev|> context <|startoftranscript|> <|notimestamps|>. The context biases the decoder
-   towards the given words (callsigns on frequency, fixes); it is cut to the last 120 tokens (Whisper allows 223). */
+   towards the given words (callsigns on frequency, fixes). VoiceParser.prompt stays near 110 tokens; 200 is a safety cap
+   (Whisper allows 223; prompt + 96 new tokens stay below the 448-token decoder limit). */
 function initTokens(prompt) {
   const g = model.generation_config;
   const init = [g.decoder_start_token_id]; if (g.no_timestamps_token_id) init.push(g.no_timestamps_token_id);
   if (!prompt) return init;
-  const ids = tokenizer.encode(' ' + prompt.trim(), { add_special_tokens: false }).slice(-120);
+  const ids = tokenizer.encode(' ' + prompt.trim(), { add_special_tokens: false }).slice(-200);
   return [tokenizer.convert_tokens_to_ids('<|startofprev|>'), ...ids, ...init];
 }
 

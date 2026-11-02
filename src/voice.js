@@ -97,6 +97,7 @@ const ASR = {
 const Mic = {
   stream: null, src: null, node: null, sink: null, chunks: [], n: 0, rec: false, level: 0, t0: 0, flushed: null, workletCtx: null,
   keepOpen: Store.get('atc.mic.keepOpen', false), capturing: false,
+  processing: Store.get('atc.mic.processing', true), // echo cancellation, noise suppression, AGC (iOS voice-processing I/O: may duck playback)
   diag: { perm: '–', opens: 0, openMs: 0, rate: 0, track: '–', session: '–', err: '', blocks: 0 },
   async perm() {
     try { if (navigator.permissions && navigator.permissions.query) { const p = await navigator.permissions.query({ name: 'microphone' }); this.diag.perm = p.state; p.onchange = () => { this.diag.perm = p.state; App.emit('voice'); }; } }
@@ -120,7 +121,8 @@ const Mic = {
     if (!c.audioWorklet) throw new Error('AudioWorklet není k dispozici');
     const t0 = performance.now(); this.capturing = true; this.session('play-and-record');
     let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    const pr = this.processing;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: pr, noiseSuppression: pr, autoGainControl: pr } }); }
     catch (e) { this.capturing = false; this.session('playback'); this.diag.err = e.name; if (e.name === 'NotAllowedError') this.diag.perm = 'denied'; throw new Error(e.name === 'NotAllowedError' ? 'mikrofon není povolený' : e.name + ': ' + e.message); }
     this.diag.perm = 'granted';
     try {
@@ -214,7 +216,7 @@ const Voice = {
     if (this.phase !== 'tx') { App.comms.txOff(); this.emit(); return; } // still opening: down() finishes the cleanup
     const rec = await Mic.stop(); App.comms.txOff(); this.stats.tx++;
     if (!rec) { this.phase = 'idle'; this.emit(); return; }
-    if (this.blocked) { this.stats.blocked++; App.comms.log('sys', 'BLOCKED: simultaneous transmission, instruction not received'); this.done({ outcome: 'BLOCKED', dur: rec.audio.length / rec.sampleRate }); return; }
+    if (this.blocked) { this.stats.blocked++; App.comms.log('sys', 'BLOCKED: simultaneous transmission, instruction not received'); this.done({ outcome: 'BLOCKED', dur: rec.audio.length / rec.sampleRate, t: App.sim.t }); return; }
     this.phase = 'asr'; this.pendingTx++; this.emit();
     const aircraft = this.onFreq();
     try {

@@ -365,15 +365,16 @@ const TESTS = [
     },
     actions(box) {
       const seg = (label, items, cur, fn) => { const r = el('div', { class: 'seg-row', role: 'group', 'aria-label': label }); for (const [k, t] of items) r.append(el('button', { 'aria-pressed': String(cur === k), onclick: () => { fn(k); App.renderChecks(); } }, t)); return [el('div', { class: 'label-sm', text: label }), r]; };
-      const mb = (m) => { const M = ASR_MODELS[m].mb; return `${m} · ${M.wasm}/${M.webgpu} MB`; };
-      box.append(...seg('Model (WASM/WebGPU)', [['tiny.en', mb('tiny.en')], ['base.en', mb('base.en')], ['small.en', mb('small.en')]], ASR.pref.model, (k) => ASR.setPref('model', k)));
+      const mb = (m) => { const M = ASR_MODELS[m].mb; return el('span', {}, m, el('br'), el('small', { text: `${M.wasm}/${M.webgpu}` })); };
+      box.append(...seg('Model (MB pro WASM/WebGPU)', [['tiny.en', mb('tiny.en')], ['base.en', mb('base.en')], ['small.en', mb('small.en')]], ASR.pref.model, (k) => ASR.setPref('model', k)));
       box.append(...seg('Zařízení', [['auto', 'Auto'], ['webgpu', 'WebGPU'], ['wasm', 'WASM']], ASR.pref.device, (k) => ASR.setPref('device', k)));
-      const load = el('button', { class: 'btn primary', onclick: () => { ASR.load().then(() => toast('Model je načtený.'), (e) => toast('Model se nenačetl: ' + e.message, 5000)); } }, ASR.state === 'ready' ? 'Znovu načíst / přepnout model' : 'Načíst model');
+      const load = el('button', { class: 'btn primary', onclick: () => { ASR.load().then(() => toast('Model je načtený.'), (e) => toast('Model se nenačetl: ' + e.message, 5000)); } }, 'Načíst / přepnout model');
       const self = el('button', { class: 'btn', onclick: async () => { self.disabled = true; try { const r = await Voice.selfTest(); const ok = r.got === r.expect; if (ok) Voice.selfOk = (Voice.selfOk || 0) + 1; toast(`${ok ? 'Samotest OK' : 'Samotest nesedí'}: čekáno ${r.expect}, rozpoznáno ${r.got} (${r.ms} ms)`, 5000); } catch (e) { toast('Samotest selhal: ' + e.message, 5000); } self.disabled = false; App.refreshChecks(); } }, 'Samotest bez mikrofonu');
       const learn = el('button', { class: 'btn', onclick: () => Voice.learn() }, Voice.key ? `PTT pedál: ${Voice.key.code || Voice.key.key} (naučit znovu)` : 'Naučit PTT pedál');
       const tog = (label, get, set) => el('button', { class: 'btn', 'aria-pressed': String(get()), onclick: () => { set(!get()); App.renderChecks(); } }, `${label}: ${get() ? 'ano' : 'ne'}`);
       box.append(el('div', { class: 'btn-row' }, load, self), learn,
         tog('Mikrofon trvale otevřený', () => Mic.keepOpen, (v) => { Mic.keepOpen = v; Store.set('atc.mic.keepOpen', v); if (!v && !Voice.ptt) Mic.close(); }),
+        tog('Potlačení ozvěny a šumu, AGC', () => Mic.processing, (v) => { Mic.processing = v; Store.set('atc.mic.processing', v); if (!Voice.ptt) Mic.close(); }),
         tog('Prompt s volacími znaky', () => Voice.usePrompt, (v) => Voice.set('usePrompt', v)),
         tog('PTT tlačítko vlevo', () => document.body.classList.contains('ptt-left'), (v) => { document.body.classList.toggle('ptt-left', v); Store.set('atc.voice.pttLeft', v); }));
     },
