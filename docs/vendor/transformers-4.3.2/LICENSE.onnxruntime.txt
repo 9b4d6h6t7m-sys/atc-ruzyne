@@ -1,0 +1,3 @@
+onnxruntime-web 1.31.0-dev.20260914-8d85527a0 (WASM binaries and loaders), MIT License, Copyright (c) Microsoft Corporation.
+Source: https://github.com/microsoft/onnxruntime/tree/8d85527a010e294a26b274749f74294b2a32cec5
+License text: https://github.com/microsoft/onnxruntime/blob/main/LICENSE
