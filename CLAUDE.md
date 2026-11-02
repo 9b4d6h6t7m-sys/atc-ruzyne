@@ -130,8 +130,10 @@ real accuracy must be measured on the iPad.
 
 ## Environment notes
 
-- Claude Code cloud environment for this repo should allow, besides the default package registries:
-  `huggingface.co`, `*.huggingface.co`, `*.hf.co`, `cdn.jsdelivr.net` (models and library builds).
+- Claude Code cloud environment `atc` (network: Limited, package managers on) allows additionally:
+  `huggingface.co`, `*.huggingface.co`, `*.hf.co`, `cdn.jsdelivr.net` (models and library builds),
+  `cdn.playwright.dev`, `playwright.download.prss.microsoft.com` (Chromium for Playwright tests).
+  If a host is blocked (HTTP 403 from the proxy), tell the user its exact name so they can add it.
 - GitHub release assets (sherpa-onnx) are used by `tools/setup_work.sh`. In Claude Code cloud
   sessions the GitHub proxy may only serve repositories attached to the session; if those downloads
   return 403, use `pip install sherpa-onnx` and the same models from Hugging Face mirrors instead.
