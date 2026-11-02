@@ -219,20 +219,25 @@ function cmdLabel(c) {
 
 /* ---------- Radio channel: one transmitter at a time, pilot readbacks after a short delay ---------- */
 class Comms {
-  constructor(sim) { this.sim = sim; this.queue = []; this.busyUntil = 0; this.speaking = false; this.listeners = []; this.entries = []; }
+  constructor(sim) { this.sim = sim; this.queue = []; this.busyUntil = 0; this.speaking = false; this.atcTx = false; this.listeners = []; this.entries = []; }
   onLog(fn) { this.listeners.push(fn); }
-  log(who, text) { const e = { t: this.sim.t, who, text }; this.entries.push(e); if (this.entries.length > 200) this.entries.shift(); this.listeners.forEach(f => f(e)); }
-  atc(ac, cmds) {
+  /* note: secondary text shown after the transmission (voice control: what was understood) */
+  log(who, text, note) { const e = { t: this.sim.t, who, text }; if (note) e.note = note; this.entries.push(e); if (this.entries.length > 200) this.entries.shift(); this.listeners.forEach(f => f(e)); }
+  /* opts.text: what the controller actually said (speech transcript); opts.delay: seconds until the readback */
+  atc(ac, cmds, opts = {}) {
     if (!ac || !cmds.length) return;
-    const text = cmds.length === 1 ? Phrase.atc(ac, cmds[0], this.sim) : Phrase.atc(ac, cmds[0], this.sim) + ', ' + cmds.slice(1).map(c => Phrase.atc(ac, c, this.sim).split(', ').slice(1).join(', ')).join(', ');
-    this.log('atc', text);
+    const text = opts.text || (cmds.length === 1 ? Phrase.atc(ac, cmds[0], this.sim) : Phrase.atc(ac, cmds[0], this.sim) + ', ' + cmds.slice(1).map(c => Phrase.atc(ac, c, this.sim).split(', ').slice(1).join(', ')).join(', '));
+    this.log('atc', text, opts.note);
     if (cmds.some(c => c.type === 'assume')) ac.ctl = 'own';
     const rb = Phrase.readback(ac, cmds, this.sim);
-    this.queue.push({ ac, due: this.sim.t + rnd(1.4, 3.0), text: rb.text, say: rb.say, apply: () => cmds.forEach(c => ac.command(c, this.sim)) });
+    this.queue.push({ ac, due: this.sim.t + (opts.delay ?? rnd(1.4, 3.0)), text: rb.text, say: rb.say, apply: () => cmds.forEach(c => ac.command(c, this.sim)) });
   }
   pilot(ac, text, say, delay = 0) { this.queue.push({ ac, due: this.sim.t + delay, text, say, call: true }); }
+  /* Controller push-to-talk: the frequency is busy, no pilot starts transmitting meanwhile. */
+  txOn() { this.atcTx = true; }
+  txOff() { this.atcTx = false; }
   tick() {
-    if (this.speaking || !this.queue.length) return;
+    if (this.speaking || this.atcTx || !this.queue.length) return;
     const now = this.sim.t; const i = this.queue.findIndex(q => q.due <= now); if (i < 0) return;
     const q = this.queue.splice(i, 1)[0];
     if (q.apply) q.apply();

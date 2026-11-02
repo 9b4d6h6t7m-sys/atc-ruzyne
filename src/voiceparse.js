@@ -82,6 +82,7 @@ const VoiceParser = (() => {
         if (!s && (w === 'to' || w === 'too') && T[j + 1] && !(T[j + 1] in DIGIT_WORDS && SOFT_DIGITS.has(T[j + 1]))) { s += '2'; j++; continue; }
         const rd = readDigits(T, j, 4); if (rd.digits) { s += rd.digits; j = rd.end; continue; }
         if (w in LETTERS) { s += LETTERS[w]; j++; continue; }
+        if (s === suf) break; // complete: only exact digits/letters may extend it (a longer suffix of another flight), never a fuzzy word ("852, radar contact")
         let fz = null; for (const k of Object.keys(LETTERS)) { if (k.length < 4 || w.length < 3) continue; const sc = sim(w, k); if (sc >= 0.66 && (!fz || sc > fz.sc)) fz = { k, sc }; } if (fz) { s += LETTERS[fz.k]; j++; continue; }
         if (w.length === 1 && /[a-z]/.test(w) && suf.includes(w.toUpperCase())) { s += w.toUpperCase(); j++; continue; }
         if (FILLERS.has(w) && s) { j++; continue; }
@@ -102,52 +103,53 @@ const VoiceParser = (() => {
   }
   /* Instructions after the callsign. */
   function instructions(T, from) {
-    const out = []; const add = (pos, c, conf) => { if (!out.some(o => o.c.type === c.type)) out.push({ pos, c, conf }); };
+    // end: index after the last token the instruction used (for the coverage check in parse)
+    const out = []; const add = (pos, c, conf, end) => { if (!out.some(o => o.c.type === c.type)) out.push({ pos, c, conf, end: Math.max(pos + 1, end || 0) }); };
     const N = T.length;
     // heading
     for (const kw of ['heading']) {
       const f = find(T, from, N, kw, 0.6);
       if (f) { const rd = readDigits(T, f.end, 3); const v = +rd.digits; if (rd.digits.length >= 2 && v >= 1 && v <= 360) {
         const pre = T.slice(Math.max(from, f.i - 3), f.i).join(' '); const dir = /left|lift|laugh/.test(pre) ? -1 : /right|write|rite|ride/.test(pre) ? 1 : 0;
-        add(f.i, { type: 'hdg', val: v, dir }, f.score); } }
+        add(f.i, { type: 'hdg', val: v, dir }, f.score, rd.end); } }
     }
     // flight level
     { const f = find(T, from, N, 'flight level', 0.62) || find(T, from, N, 'level', 0.8);
-      if (f) { const rd = readDigits(T, f.end, 3); let v = +rd.digits; if (rd.digits.length >= 2 && v >= 10 && v <= 450) add(f.i, { type: 'alt', val: v * 100 }, f.score); } }
+      if (f) { const rd = readDigits(T, f.end, 3); let v = +rd.digits; if (rd.digits.length >= 2 && v >= 10 && v <= 450) add(f.i, { type: 'alt', val: v * 100 }, f.score, rd.end); } }
     // altitude in feet
     if (!out.some(o => o.c.type === 'alt')) {
       const f = find(T, from, N, 'altitude', 0.65);
-      if (f) { const rd = readDigits(T, f.end, 5); let v = +rd.digits; if (v > 0 && v < 100) v *= 100; if (v >= 1000 && v <= 20000) add(f.i, { type: 'alt', val: v }, f.score); }
-      else { for (let i = from; i < N; i++) if (/^(feet|ft|fit|feat)$/.test(T[i])) { let k = i - 1; while (k > from && (/^\d+$/.test(T[k]) || T[k] in DIGIT_WORDS || /thousand|hundred/.test(T[k]))) k--; const rd = readDigits(T, k + 1, 5); const v = +rd.digits; if (v >= 1000 && v <= 20000) add(k + 1, { type: 'alt', val: v }, 0.6); break; } }
+      if (f) { const rd = readDigits(T, f.end, 5); let v = +rd.digits; if (v > 0 && v < 100) v *= 100; if (v >= 1000 && v <= 20000) add(f.i, { type: 'alt', val: v }, f.score, rd.end); }
+      else { for (let i = from; i < N; i++) if (/^(feet|ft|fit|feat)$/.test(T[i])) { let k = i - 1; while (k > from && (/^\d+$/.test(T[k]) || T[k] in DIGIT_WORDS || /thousand|hundred/.test(T[k]))) k--; const rd = readDigits(T, k + 1, 5); const v = +rd.digits; if (v >= 1000 && v <= 20000) add(k + 1, { type: 'alt', val: v }, 0.6, i + 1); break; } }
     }
     // speed
     { const nf = find(T, from, N, 'no speed restriction', 0.72) || find(T, from, N, 'resume normal speed', 0.75);
-      if (nf) add(nf.i, { type: 'spd', val: null }, nf.score);
+      if (nf) add(nf.i, { type: 'spd', val: null }, nf.score, nf.end);
       else {
         let f = find(T, from, N, 'speed', 0.7);
         let rd = f ? readDigits(T, f.end + (T[f.end] === 'to' ? 1 : 0), 3) : null;
         if (!(rd && rd.digits.length === 3)) { // "... 220 knots"
-          for (let i = from; i < N; i++) if (sim(T[i], 'knots') >= 0.6 || /^(nots?|nuts|knot|nups|ops|notts)$/.test(T[i])) { let k = i - 1; while (k > from && (/^\d+$/.test(T[k]) || T[k] in DIGIT_WORDS)) k--; rd = readDigits(T, k + 1, 3); f = { i: k + 1, score: 0.65 }; break; }
+          for (let i = from; i < N; i++) if (sim(T[i], 'knots') >= 0.6 || /^(nots?|nuts|knot|nups|ops|notts)$/.test(T[i])) { let k = i - 1; while (k > from && (/^\d+$/.test(T[k]) || T[k] in DIGIT_WORDS)) k--; rd = readDigits(T, k + 1, 3); rd.end = Math.max(rd.end, i + 1); f = { i: k + 1, score: 0.65 }; break; }
         }
-        if (rd && rd.digits.length === 3) { const v = +rd.digits; if (v >= 120 && v <= 350) add(f.i, { type: 'spd', val: v }, f.score); }
+        if (rd && rd.digits.length === 3) { const v = +rd.digits; if (v >= 120 && v <= 350) add(f.i, { type: 'spd', val: v }, f.score, rd.end + (/^(knots?|nots?)$/.test(T[rd.end] || '') ? 1 : 0)); }
       } }
     // direct to a fix
     { const f = find(T, from, N, 'direct', 0.75);
       if (f) { let k = f.end; if (T[k] === 'to' || T[k] === 'two') k++; let bestFix = null; const COMMON = /^(flight|level|fight|light|to|the|send|sent|descend|descent|climb|speed|heading|turn|contact|cleared|runway|approach)$/;
-        for (let n = 1; n <= 3 && k + n <= N; n++) { const win = T.slice(k, k + n); if (win.some(w => COMMON.test(w) || /\d/.test(w))) break; const cand = win.join(''); for (const name of Object.keys(FIX)) { const sc = sim(cand, name); if (sc >= 0.7 && (!bestFix || sc > bestFix.sc)) bestFix = { name, sc }; } }
-        if (bestFix) add(f.i, { type: 'dct', fix: bestFix.name }, Math.min(f.score, bestFix.sc)); } }
+        for (let n = 1; n <= 3 && k + n <= N; n++) { const win = T.slice(k, k + n); if (win.some(w => COMMON.test(w) || /\d/.test(w))) break; const cand = win.join(''); for (const name of Object.keys(FIX)) { const sc = sim(cand, name); if (sc >= 0.7 && (!bestFix || sc > bestFix.sc)) bestFix = { name, sc, end: k + n }; } }
+        if (bestFix) add(f.i, { type: 'dct', fix: bestFix.name }, Math.min(f.score, bestFix.sc), bestFix.end); } }
     // ILS approach: "approach" or "ils" near a runway number
     { const f = find(T, from, N, 'approach', 0.65) || find(T, from, N, 'i l s', 0.75) || find(T, from, N, 'cleared', 0.75);
-      if (f) { for (let i = f.end; i < Math.min(N, f.end + 6); i++) { const rd = readDigits(T, i, 2); if (rd.digits.length === 2 && RWY[rd.digits]) { add(f.i, { type: 'ils', rwy: rd.digits }, f.score); break; } if (rd.digits.length === 1 && T[i + 1] && RWY['0' + rd.digits]) { /* "6" -> 06 */ } } } }
+      if (f) { for (let i = f.end; i < Math.min(N, f.end + 6); i++) { const rd = readDigits(T, i, 2); if (rd.digits.length === 2 && RWY[rd.digits]) { add(f.i, { type: 'ils', rwy: rd.digits }, f.score, rd.end); break; } if (rd.digits.length === 1 && T[i + 1] && RWY['0' + rd.digits]) { /* "6" -> 06 */ } } } }
     // transfer
     { const c = find(T, from, N, 'contact', 0.7);
       if (c) { const rest = T.slice(c.end, c.end + 5).join(' ');
-        if (find(T, c.end, c.end + 4, 'control', 0.66) || find(T, c.end, c.end + 3, 'praha', 0.7)) add(c.i, { type: 'xfer', to: 'ACC' }, c.score);
-        else if (find(T, c.end, c.end + 4, 'tower', 0.75) || /134|13 4|ruzyn|rosen|risen|resin|roozin/.test(rest)) add(c.i, { type: 'xfer', to: 'TWR' }, c.score); } }
+        if (find(T, c.end, c.end + 4, 'control', 0.66) || find(T, c.end, c.end + 3, 'praha', 0.7)) add(c.i, { type: 'xfer', to: 'ACC' }, c.score, N);
+        else if (find(T, c.end, c.end + 4, 'tower', 0.75) || /134|13 4|ruzyn|rosen|risen|resin|roozin/.test(rest)) add(c.i, { type: 'xfer', to: 'TWR' }, c.score, N); } } // a transfer ends the transmission (frequency, greeting)
     // resume own navigation
-    { const f = find(T, from, N, 'navigation', 0.7); if (f) add(f.i, { type: 'res' }, f.score); }
+    { const f = find(T, from, N, 'navigation', 0.7); if (f) add(f.i, { type: 'res' }, f.score, f.end); }
     // radar contact / identified
-    { const f = find(T, from, N, 'radar contact', 0.68) || find(T, from, N, 'identified', 0.7); if (f && !out.some(o => o.c.type === 'xfer')) add(f.i, { type: 'assume' }, f.score); }
+    { const f = find(T, from, N, 'radar contact', 0.68) || find(T, from, N, 'identified', 0.7); if (f && !out.some(o => o.c.type === 'xfer')) add(f.i, { type: 'assume' }, f.score, f.end); }
     return out.sort((a, b) => a.pos - b.pos);
   }
   function parse(text, aircraft) {
@@ -156,9 +158,37 @@ const VoiceParser = (() => {
     const cs = callsign(T, aircraft);
     if (!cs) return { ac: null, cmds: [], conf: 0, error: 'CALLSIGN NOT RECOGNISED', tokens: T };
     if (cs.ambiguous) return { ac: null, cmds: [], conf: 0, error: 'CALLSIGN AMBIGUOUS ' + cs.options.join('/'), ambiguous: cs.options, tokens: T };
-    const ins = instructions(T, Math.min(cs.next, T.length));
-    const conf = ins.length ? Math.min(cs.score, ...ins.map(i => i.conf)) : cs.score * 0.5;
-    return { ac: cs.ac, cmds: ins.map(i => i.c), conf, csScore: cs.score, margin: cs.margin, heard: cs.heard, error: ins.length ? null : 'INSTRUCTION NOT RECOGNISED', tokens: T, mode: 'voice' };
+    const from = Math.min(cs.next, T.length); const ins = instructions(T, from);
+    const left = unexplained(T, from, ins);
+    let conf = ins.length ? Math.min(cs.score, ...ins.map(i => i.conf)) : cs.score * 0.5;
+    if (left.length) conf = Math.min(conf, UNEXPLAINED_CONF); // part of the transmission was not understood: ask again rather than act on half of it
+    return { ac: cs.ac, cmds: ins.map(i => i.c), conf, csScore: cs.score, margin: cs.margin, heard: cs.heard, unexplained: left, error: ins.length ? null : 'INSTRUCTION NOT RECOGNISED', tokens: T, mode: 'voice' };
   }
-  return { parse, tokens, phon, sim, readDigits, callsign, instructions };
+  /* Coverage: numbers and instruction words after the callsign that no recognised instruction used. They mean an
+     instruction was heard but not understood (e.g. "increase P-260 or nots", "direct arctic"). Each instruction also
+     covers up to three words before its keyword (turn left / descend to / cleared) and a QNH group after an altitude. */
+  const UNEXPLAINED_CONF = 0.5;
+  const KEYWORDS = new Set(['heading', 'level', 'flight', 'speed', 'knots', 'direct', 'approach', 'ils', 'cleared', 'contact', 'descend', 'climb', 'turn', 'navigation', 'altitude', 'feet', 'tower', 'reduce', 'increase', 'runway', 'proceed']);
+  function unexplained(T, from, ins) {
+    const cov = new Uint8Array(T.length);
+    for (const o of ins) {
+      let e = o.end;
+      if (o.c.type === 'alt') while (e < T.length && e < o.end + 10 && /^(q|n|h|qnh|nh|qh|feet|ft|\d+|decimal|and|a)$/.test(T[e])) e++;
+      for (let i = Math.max(from, o.pos - 3); i < Math.min(T.length, e); i++) cov[i] = 1;
+    }
+    const out = [];
+    for (let i = from; i < T.length; i++) { const w = T[i]; if (!cov[i] && (/^\d/.test(w) || KEYWORDS.has(w) || (w in DIGIT_WORDS && !SOFT_DIGITS.has(w)))) out.push(w); }
+    return out;
+  }
+  /* Decoder prompt for the speech recogniser: the callsigns on frequency, written the way Whisper writes them, plus the
+     phraseology and fixes in use. Whisper continues the style and vocabulary of its prompt, so telephony designators
+     (Skytravel, Speedbird) and fix names come out spelled as the parser expects instead of as similar English words. */
+  const PROMPT_TEL = { AIRFRANS: 'Air France', KLM: 'KLM', LOT: 'LOT', CSA: 'CSA', TOPSWISS: 'Top Swiss' };
+  const telWritten = (cs) => { const al = AIRLINES[cs.slice(0, 3)]; if (!al) return cs.slice(0, 3); return PROMPT_TEL[al.tel] || al.tel.split(' ').map(w => w[0] + w.slice(1).toLowerCase()).join(' '); };
+  function prompt(aircraft, opts = {}) {
+    const calls = aircraft.slice(0, 10).map(a => `${telWritten(a.cs)} ${a.cs.slice(3)}`); // with 8 fixes about 110 tokens
+    const fixes = [...new Set([...(opts.fixes || []), ...aircraft.flatMap(a => (a.route || []).slice(a.routeIdx || 0))])].filter(f => FIX[f] && f.length === 5).slice(0, 8).map(f => f[0] + f.slice(1).toLowerCase());
+    return `Praha Radar, ${calls.join(', ')}. Descend flight level, turn left heading, reduce speed, cleared ILS approach runway ${opts.rwy || '24'}${fixes.length ? ', direct ' + fixes.join(', ') : ''}, contact Ruzyne Tower.`;
+  }
+  return { parse, tokens, phon, sim, readDigits, callsign, instructions, prompt };
 })();

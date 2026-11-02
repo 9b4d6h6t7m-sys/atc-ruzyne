@@ -23,7 +23,9 @@ Handoff and working notes for Claude. Read this file first in every session.
 src/            source (plain browser JS, no framework, no bundler; globals in load order)
 docs/           BUILD OUTPUT served by GitHub Pages (main branch, /docs). Never edit by hand.
   index.html    the whole app in one file (CSS + JS inlined)
-  voices/       pilot voice packs: <id>.mp3 sprite (16 kHz, 32 kbps) + <id>.json index
+  asr-worker.js, mic-worklet.js   copied from src/ by build.py (workers cannot be inlined)
+  voices/       pilot voice packs: <id>.mp3 sprite (16 kHz, 32 kbps) + <id>.json index (tools/tts/packgen.py)
+  vendor/       transformers.js + onnxruntime-web WASM, pinned and verified (tools/vendor.py)
 tools/          build, browser tests, data generation, TTS pack generator, ASR evaluation
 .work/          gitignored: models, sherpa-onnx, raw WAV, screenshots, bundle.js
 ```
@@ -37,11 +39,21 @@ python3 tools/build.py            # src/ -> docs/index.html (+ .work/bundle.js)
 node --check .work/bundle.js      # syntax check of the concatenated bundle
 python3 tools/functest.py         # Playwright/Chromium functional test, must end with "FAILED: []"
 node tools/asr_eval/eval.js gb us cz   # VoiceParser accuracy on stored Whisper transcripts
+python3 tools/vendor.py --check   # vendored runtime matches VENDOR.json (sha256)
+node tools/asr_eval/browser.js base.en gb us cz [--prompt]   # the game's ASR worker on the eval audio
+node tools/asr_eval/policy.js 'tools/asr_eval/hyp/tjs-whisper-base.en_{v}.json'   # executed/wrong/say-again per threshold
 ```
 
 - Always rebuild and commit `docs/` together with source changes (Pages serves the committed build).
 - `functest.py` serves `docs/` on a local port itself and sets `App.fastRadio = true` so readbacks
-  are not played in real time. Screenshots go to `.work/shots/`.
+  are not played in real time. Screenshots go to `.work/shots/`. It runs Chromium with a fake
+  microphone (PTT capture) and routes `huggingface.co` model requests to `.work/models/`; the ASR
+  self-test (voice pack → Whisper tiny.en WASM → parser → readback) runs only when tiny.en is there
+  (`node tools/asr_eval/browser.js tiny.en gb --limit 1` downloads it), otherwise it prints SKIP.
+- Python Playwright must match the preinstalled Chromium: `pip install playwright==1.63.0`
+  (Chromium 1243 in `/opt/pw-browsers`; never run `playwright install`).
+- Headless audio timing is unreliable under CPU load (the fake output device renders in bursts): tests
+  check that PTT captured audio, not its duration.
 - `tools/setup_work.sh` downloads sherpa-onnx, the TTS voices and Whisper into `.work/` (GitHub
   release assets) and compiles `batchtts`. Needed only for `tools/tts/packgen.py` and
   `tools/asr_eval/run.py`, not for the game.
@@ -55,27 +67,38 @@ node tools/asr_eval/eval.js gb us cz   # VoiceParser accuracy on stored Whisper 
 | data.js | generated LKPR geometry: runways, taxiways, stands, TMA, fixes, terrain/map layers |
 | core.js | `Geo`, `FIX`, `RWY`, `PERF`, `AIRLINES`, `PHON`/`DIGW` (spoken forms), `Speak` (callsign/number/fix speech), `Store`, DOM helpers |
 | sim.js | `Aircraft` (flight model, ILS capture, modes), `Sim` (step, conflicts), traffic generators |
-| phrase.js | `Phrase` (ATC/pilot phrase builders; readback variants by pilot style), `Parser` (typed commands), `cmdLabel`, `Comms` (radio queue, frequency busy, readbacks) |
-| audio.js | `Sound`: iOS-safe audio (unlock on every gesture, `navigator.audioSession`, silent-loop keep-alive, resume on visibility), tones, `say()` (speechSynthesis fallback), `transmit()` |
-| voicepack.js | `VoicePack`: loads `voices/<id>`, plans a phrase from the unit vocabulary (mid/end intonation variants), schedules it through a VHF radio chain (band-pass, presence, compressor, soft clip). `VP_MAP` maps airline → accent voice pool |
-| voiceparse.js | `VoiceParser` for speech: phonetic keys, fuzzy callsign matching restricted to aircraft on frequency, ambiguity check, homophone-aware number reading, confidence. **Not yet in the build.** |
+| phrase.js | `Phrase` (ATC/pilot phrase builders; readback variants by pilot style), `Parser` (typed commands), `cmdLabel`, `Comms` (radio queue, frequency busy incl. controller PTT `txOn/txOff`, readbacks; `atc(ac, cmds, {text, note, delay})` logs a speech transcript with what was understood) |
+| voiceparse.js | `VoiceParser` for speech: phonetic keys, fuzzy callsign matching restricted to aircraft on frequency, ambiguity check, homophone-aware number reading, confidence; `prompt(aircraft)` = Whisper decoder prompt |
+| audio.js | `Sound`: iOS-safe audio (unlock on every gesture, `navigator.audioSession` – `play-and-record` while `Mic.capturing`, silent-loop keep-alive, resume on visibility), tones, `say()` (speechSynthesis fallback), `transmit()` |
+| voicepack.js | `VoicePack`: loads `voices/<id>`, plans a phrase from the unit vocabulary (mid/end intonation variants), schedules it through a VHF radio chain (band-pass, presence, compressor, soft clip). `VP_MAP` maps airline → accent voice pool; `renderOffline()` (used by the ASR self-test) |
+| voice.js | voice control: `ASR_MODELS` (pinned Whisper repos/revisions/dtypes, read by tools), `ASR` (worker client: WebGPU→WASM fallback, progress, transcribe), `Mic` (getUserMedia → AudioWorklet, audio session switching), `Voice` (PTT state machine, keys, radio policy, self-test, stats), `pttControl()` |
+| asr-worker.js | module worker (copied to docs/): imports `vendor/transformers-4.3.2/`, Whisper load + warm-up, resample to 16 kHz, silence trim, fast log-mel, decoder prompt, greedy decoding |
+| mic-worklet.js | AudioWorkletProcessor (copied to docs/): 2048-frame blocks with peak level, `flush` |
 | radar.js | `RadarView` (TopSky-like), `PanZoom`, `CommandMenu`, label menus, vector gestures (pen/long-press drag → HDG, snap to fix → DCT) |
 | ground.js | A-SMGCS ground view, `GroundTraffic`, RIMCAS, status bar, sequence list |
 | window.js | `WindowView`: canvas tower-cab view (sky, sun, clouds, stars, terrain, Prague skyline, buildings, 3D aircraft, lights, fog/LVP halo) |
 | strips.js | `StripBay` (drag strips, reorder, CLR state) |
-| tests.js | the current app is a **feature-test harness**: `TESTS` (radar, ground, strips, touch, pencil, mouse, keyboard, voices, input, alerts, display, storage, perf, results) with Czech checklists, instructor actions, ATC command dock (`mountDock`, `commandLine`) |
-| app.js | `App` shell: navigation, audio button, results report, boot, frame loop |
+| tests.js | the current app is a **feature-test harness**: `TESTS` (radar, ground, strips, touch, pencil, mouse, keyboard, voices, input, voice, alerts, display, storage, perf, results) with Czech checklists, instructor actions, ATC command dock (`mountDock`, `commandLine`) |
+| app.js | `App` shell: navigation, audio button, results report (incl. `voiceReport()`: backend, timings, last transcripts), PTT key hooks (capture phase), boot, frame loop |
 
-Conventions: HMI strings English; one global object per module; no external runtime dependencies so
-far except Google Fonts. Keep 120 Hz on ProMotion: cap canvas DPR (window view ≤ 1.5), batch drawing.
+Conventions: HMI strings English; one global object per module; no external runtime dependencies
+except Google Fonts and the Whisper model files (Hugging Face hub, pinned revisions, cached by the
+browser). Keep 120 Hz on ProMotion: cap canvas DPR (window view ≤ 1.5), batch drawing.
+`build.py` prepends `const ASSET = {...}`: URLs of the copied worker files with a content hash.
 
 ## iOS / Safari constraints (learned the hard way)
 
 - Audio only starts from a user gesture; `AudioContext` can become `suspended`/`interrupted` after
   app switching. `Sound.unlock()` runs on every gesture; `whenRunning()` resumes or drops a sound
   after 400 ms. A silent looping `<audio>` keeps the session alive in silent mode.
-- `navigator.audioSession.type` exists on iPadOS Safari; use `'playback'` normally. For microphone
-  capture it will have to switch to `'play-and-record'` during push-to-talk and back afterwards.
+- `navigator.audioSession.type` exists on iPadOS Safari; `'playback'` normally, `'play-and-record'`
+  while the microphone is open (`Mic` switches it around each PTT; `Sound.unlock()` respects it).
+  Unverified on the iPad: whether the switch interrupts the AudioContext or lowers playback volume
+  (the voice test has a "keep microphone open" toggle to compare).
+- A touch `pointerdown` is not a user activation (only `pointerup`/`touchend` are): the PTT button
+  cannot resume a suspended AudioContext. `Voice.down()` reports AUDIO SUSPENDED instead of waiting.
+- GitHub Pages sends no COOP/COEP headers, so the page is not cross-origin isolated and ONNX Runtime
+  WASM runs single-threaded there (WebGPU is unaffected).
 - Leaving the app drops the display to 60 Hz until it is reopened (OS behaviour, not a bug).
 - The app used to run as a claude.ai artifact (strict CSP, no microphone). It now runs on GitHub Pages,
   so microphone, WebGPU, Workers, Cache API and cross-origin model downloads are available.
@@ -90,33 +113,92 @@ far except Google Fonts. Keep 120 Hz on ProMotion: cap canvas DPR (window view �
   (`python3 tools/tts/packgen.py all`), rebuild. A coverage check over all phrases must find no
   missing unit.
 
-## In progress: voice control (user chose "variant B")
+## Voice control (variant B) – implemented in v0.4, awaiting the first iPad test
 
 Push-to-talk speech input, fully on-device, then grammar-constrained interpretation.
 
-1. PTT: on-screen button, hold Space (pause moves to P), Bluetooth pedal acting as a key. Frequency
-   is busy while transmitting.
-2. Capture: `getUserMedia` + AudioWorklet, resample to 16 kHz mono, trim silence.
-3. ASR: Whisper via transformers.js (`@huggingface/transformers`) in a Web Worker; WebGPU with WASM
-   fallback; selectable tiny.en/base.en/small.en. Candidate model id `onnx-community/whisper-base.en`
-   (verify files/dtypes before use). Bias decoding with a prompt of callsigns on frequency, fixes and
-   runway if supported. Vendor the library and pin versions; cache models (Cache API).
-4. Interpretation: `VoiceParser.parse(text, aircraftOnFrequency)` → commands + confidence. Policy:
-   low confidence → pilot answers "say again"; ambiguous callsign → "station calling, say again
-   callsign". Show the recognised text in the radio log.
-5. Diagnostics test page: mic permission, model download progress, WebGPU availability, latency,
-   last transcripts.
+Pipeline: PTT (`pttControl()` button on the radar views, held Space, or a learned key such as a
+Bluetooth pedal; pause moved to P) → `Mic` (getUserMedia with EC/NS/AGC → `mic-worklet.js` blocks;
+opened per press and closed on release unless "keep microphone open"; audio session
+`play-and-record` only while open) → `ASR.transcribe()` (`asr-worker.js`: resample to 16 kHz,
+energy trim – no speech means no radio response, fast log-mel, Whisper greedy decoding with
+`VoiceParser.prompt(aircraft on frequency)` as decoder prompt) → `VoiceParser.parse()` →
+`Voice.handle()` policy:
+
+- callsign + instructions, confidence ≥ `Voice.minConf` (0.6) → `Comms.atc()`: transcript in the
+  radio log with what was understood as a note, readback after 0.8–1.8 s.
+- callsign but no, uncertain or only partly understood instruction → that pilot: "say again, <callsign>".
+  Partly understood = numbers or instruction words after the callsign that no recognised instruction
+  used (`unexplained`, caps confidence at 0.5).
+- ambiguous callsign → the most likely pilot: "Praha Radar, say again" (log note CALLSIGN AMBIGUOUS).
+  The planned wording "station calling, say again callsign" needs the units `station calling` and
+  `callsign` in the voice packs; add them at the next `packgen.py` run and change `Voice.handle()`.
+- no callsign → a random pilot on frequency: "Praha Radar, say again" (only for ≥ 3 words).
+- PTT over a pilot transmission → BLOCKED, nothing delivered. While PTT is held no pilot starts.
+
+Runtime: `@huggingface/transformers` 4.3.2 with its exact `onnxruntime-web 1.31.0-dev.20260914-8d85527a0`
+(asyncify WASM for WebGPU/current browsers, plain WASM for Safari < 26 without WebGPU), vendored by
+`tools/vendor.py` into `docs/vendor/transformers-4.3.2/` (41.8 MB; jsDelivr is not used). Models:
+`onnx-community/whisper-{tiny,base,small}.en` at pinned revisions (`ASR_MODELS` in voice.js); WASM
+q8/q8, WebGPU fp32 encoder + q4 decoder (small.en: fp16 encoder). Default base.en, device auto
+(WebGPU, WASM fallback when the WebGPU session fails, reported in the voice test). transformers.js
+caches model and WASM files in the Cache API (`transformers-cache`); after one successful load the
+app loads the model at start (`atc.asr.auto`). HF serves CORS for the Pages origin (checked).
+
+Measured with the game's worker in headless Chromium (`tools/asr_eval/browser.js`; Linux x86, WASM
+4 threads, cross-origin isolated; on Pages the iPad gets 1 WASM thread, or WebGPU), parser after the
+v0.4 fixes, whole-transmission accuracy / wrong aircraft:
+
+| transcripts | gb | us | cz |
+|---|---|---|---|
+| sherpa-onnx base.en int8 (baseline) | 59 % / 0 | 56 % / 1 | 9 % / 1 |
+| transformers.js tiny.en q8 | 46 % / 5 | 45 % / 2 | 6 % / 2 |
+| transformers.js tiny.en q8 + prompt | 57 % / 2 | 53 % / 2 | 13 % / 1 |
+| transformers.js base.en q8 | 58 % / 1 | 62 % / 2 | 8 % / 0 |
+| **transformers.js base.en q8 + prompt** (default) | **76 % / 1** | **68 % / 0** | **19 % / 0** |
+
+The decoder prompt is the biggest single gain: base.en callsign recognition gb 74 → 90 %, us 82 → 93 %,
+cz 41 → 74 % (the eval prompt holds the addressed flight and six others, as the game's frequency would,
+plus eight arrival fixes). Risk seen once: "runway 30" decoded as "24" (the prompt names the active runway).
+Policy on base.en + prompt, gb+us, minConf 0.6 (`tools/asr_eval/policy.js`): 70 % executed correctly,
+5 % executed wrongly (a wrong number; no wrong aircraft), 25 % "say again". Without the coverage check
+14 % were executed wrongly, mostly with a second or third instruction silently dropped.
+
+Latency per transmission (40 gb transmissions, 3.5 s of audio on average, container vCPUs, nothing else
+running), median / p90 from the worker message to the transcript: base.en WASM 4 threads 2.3 / 2.9 s with
+the prompt (2.3 / 3.7 s without), 1 thread 5.4 / 6.2 s (5.1 / 6.0 s without); tiny.en 1 thread with the
+prompt 2.7 / 3.1 s. The prompt costs nothing measurable; log-mel features take 30–40 ms. GitHub Pages
+gives the iPad 1 WASM thread, so WebGPU decides whether base.en is fast enough there (M2 cores are faster
+than these vCPUs). WebGPU itself was checked headless on a SwiftShader adapter (correct transcripts,
+fp32 encoder + q4 decoder session works; CPU-emulated, so no timing).
+
+Diagnostics: test "Hlasové ovládání" (radar, PTT, transcript table; instructor: model, device,
+load, self-test without microphone, learn pedal key, keep microphone open, EC/NS/AGC, prompt on/off,
+PTT button side). The
+results report adds backend, timings and the last 12 transcripts with audio length / PTT hold
+time, ASR time (features + decoder) and outcome: paste them to tune the parser on real speech.
+
+To confirm on the iPad: WebGPU active (and in the worker) and its latency; download and caching;
+microphone permission in Safari vs the Home Screen app; effect of the audio-session switch on pilot
+playback (volume, route) and on the first syllable (open latency, "keep microphone open" and
+"EC/NS/AGC" toggles); pedal key; accuracy with a real (Czech) accent.
+
+Next steps for voice control (after the iPad report): tune `VoiceParser` on the real transcripts from
+the results report (wrong numbers are the main remaining error; telephony, ILS wording and fix names
+next); add `station calling` and `callsign` to the voice packs; if WebGPU is missing in Safari's
+worker, decide between WASM (1 thread on Pages) and cross-origin isolation through a service worker
+(WASM threads, but COEP also constrains Google Fonts and model downloads); small.en only if base.en
+is not good enough with a real accent (410 MB on WebGPU).
 
 Offline evaluation (`tools/asr_eval/`): 160 synthetic controller transmissions (`dataset.json`:
 id, callsign, expected commands, spoken text), synthesised with three voices (`audio/<cz|gb|us>/<id>.mp3`,
-16 kHz mono), transcribed by Whisper base.en via sherpa-onnx (`hyp/whisper-base.en_<v>.json`, the
-baseline), scored with the game's parser (`eval.js`; `HYP=<pattern with {v}>` scores other transcripts).
-The audio lets any new ASR path (e.g. transformers.js in headless Chromium) be compared on the same input.
-Current whole-transmission accuracy: gb 57 %, us 55 %, cz (synthetic Czech accent) 9 %; wrong
-aircraft ≤ 1. Remaining failures: mangled telephony (Ryanair, Skytravel, Aegean, Qatari, Turkish,
-Vueling, Finnair), ILS wording ("FIDA LS approach"), number fragments ("1 under 0"), direct-to fixes
-("direct evening" → EVEMI), "contact Rousin". Synthetic Czech accent is far worse than real speech;
-real accuracy must be measured on the iPad.
+16 kHz mono). Transcripts in `hyp/`: `whisper-base.en_<v>.json` (sherpa-onnx baseline) and
+`tjs-whisper-<model>[-prompt]_<v>.json` (the game's worker). `eval.js` scores them with the
+game's parser (`HYP=<pattern with {v}>`), `policy.js` simulates the radio policy per threshold.
+Remaining failures: mangled telephony (Ryanair, Skytravel, Aegean, Qatari, Turkish, Vueling,
+Finnair), ILS wording ("FIDA LS approach"), number fragments ("1 under 0"), direct-to fixes
+("direct evening" → EVEMI), "contact Rousin". The synthetic Czech accent is far worse than real
+speech; real accuracy must be measured on the iPad.
 
 ## Next: AI pilots (user chose "P2 built on P1")
 

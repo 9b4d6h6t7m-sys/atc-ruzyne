@@ -16,7 +16,9 @@ class RadioLog {
   add(e) {
     const cls = e.who === 'atc' ? 'atc' : e.who === 'plt' ? 'plt' : 'sys';
     const who = e.who === 'atc' ? 'ATC' : e.who === 'plt' ? 'PILOT' : 'INFO';
-    this.el.append(el('div', { class: cls }, el('span', { class: 't', text: hhmmss(e.t) }), `${who}: ${e.text}`));
+    const row = el('div', { class: cls }, el('span', { class: 't', text: hhmmss(e.t) }), `${who}: ${e.text}`);
+    if (e.note) row.append(el('span', { class: 'note', text: ' ' + e.note }));
+    this.el.append(row);
     while (this.el.children.length > 60) this.el.firstChild.remove();
     this.el.scrollTop = this.el.scrollHeight;
   }
@@ -92,7 +94,7 @@ function mountDock(v, view, testId) {
 const TESTS = [
   {
     id: 'radar', name: 'Radar APP',
-    howto: 'Klepni na label: otevře se <b>menu povelů</b> (HDG, CFL, SPD, DCT, APP, XFER). <b>Gesto</b>: táhni Pencilem z letadla kam má letět nebo na bod, prstem nejdřív chvilku podrž. Tlačítko <b>PANEL</b> zapne panel ATC. Na klávesnici: po klepnutí na label stačí psát jen pokyn (např. <i>L270 F80</i>), Tab doplní volací znak, šipky nahoru a dolů vrací předchozí povely. Mapu posuneš tažením prázdného místa.',
+    howto: 'Klepni na label: otevře se <b>menu povelů</b> (HDG, CFL, SPD, DCT, APP, XFER). <b>Gesto</b>: táhni Pencilem z letadla kam má letět nebo na bod, prstem nejdřív chvilku podrž. Tlačítko <b>PANEL</b> zapne panel ATC. Na klávesnici: po klepnutí na label stačí psát jen pokyn (např. <i>L270 F80</i>), Tab doplní volací znak, šipky nahoru a dolů vrací předchozí povely. <b>PTT</b> vpravo nebo mezerník: hlasový pokyn (test Hlasové ovládání), pauza je na klávese P. Mapu posuneš tažením prázdného místa.',
     checks: [
       { id: 'render', t: 'Mapa TMA a letadla se vykreslují, pohyb je čitelný' },
       { id: 'label', t: 'Klepnutí nebo najetí na label ho rozbalí', auto: () => featN('tapLabel') + featN('hoverLabel') > 0 },
@@ -121,7 +123,7 @@ const TESTS = [
         this.cmd.parentElement.style.display = on ? 'none' : ''; this.log.el.classList.toggle('top', on); panelBtn.setAttribute('aria-pressed', String(on)); setTimeout(() => this.view.resize(), 20); App.feature('panelToggle'); } }, 'PANEL');
       tb.append(sweepBtn, vecBtn, el('button', { class: 'vt-btn', onclick: () => { Object.assign(this.view, { cx: 0, cy: -1, scale: 7.5 }); } }, 'HOME'), panelBtn);
       v.append(tb); this.log = new RadioLog(v); this.cmd = commandLine(v, { id: 'cmd-radar' });
-      this.dockUi = mountDock(v, this.view, 'radar'); this.dockUi.dock.style.display = 'none';
+      this.dockUi = mountDock(v, this.view, 'radar'); this.dockUi.dock.style.display = 'none'; this.ptt = pttControl(v);
     },
     draw(now) { this.view.draw(now); },
   },
@@ -257,7 +259,7 @@ const TESTS = [
   },
   {
     id: 'keyboard', name: 'Klávesnice',
-    howto: 'Piš do příkazového řádku, například <b>35J L270</b>, <b>TVS35J F80 S180</b>, <b>AFR1083 D ERASU</b>, <b>KLM1355 AS</b> nebo <b>RYR8YD I24</b>, a potvrď klávesou Enter. Když nic není vybrané, stačí začít psát: řádek se aktivuje sám. Mezerník mimo řádek přepíná pauzu.',
+    howto: 'Piš do příkazového řádku, například <b>35J L270</b>, <b>TVS35J F80 S180</b>, <b>AFR1083 D ERASU</b>, <b>KLM1355 AS</b> nebo <b>RYR8YD I24</b>, a potvrď klávesou Enter. Když nic není vybrané, stačí začít psát: řádek se aktivuje sám. Klávesa P mimo řádek přepíná pauzu, mezerník je PTT hlasového ovládání.',
     checks: [
       { id: 'keys', t: 'Stisky kláves se zobrazují v záznamu', auto: () => App.keys.length > 0 },
       { id: 'cmd', t: 'Povel z příkazového řádku letadlo provede', auto: () => featN('cmdline') > 0 },
@@ -326,7 +328,71 @@ const TESTS = [
       const wrap = el('div', { class: 'canvas-wrap with-dock' }); v.append(wrap);
       this.view = new RadarView(wrap, App.sim, { onCommand: (ac, cmds) => App.comms.atc(ac, cmds), gestures: true, scale: 6.2 });
       App.radars.push(this.view); new RadioLog(v).el.classList.add('top');
-      this.dock = mountDock(v, this.view, 'input');
+      this.dock = mountDock(v, this.view, 'input'); pttControl(v);
+    },
+    draw(now) { this.view.draw(now); },
+  },
+  {
+    id: 'voice', name: 'Hlasové ovládání',
+    howto: 'Drž <b>PTT</b> (kulaté tlačítko vpravo, <b>mezerník</b> nebo naučený <b>pedál</b>) a řekni celý pokyn s volacím znakem, např. <i>„Skytravel three five Juliett, descend flight level eight zero“</i>. PTT pusť až po posledním slově. Rozpoznaný text se objeví v rádiovém záznamu a dole v tabulce, pilot pokyn zopakuje, nebo požádá o „say again“. První stisk stáhne model rozpoznávání (velikost u volby modelu), další spuštění ho vezme z paměti prohlížeče. <b>Samotest</b> ověří rozpoznávání bez mikrofonu hlasem z balíčku. Pauza je teď na klávese <b>P</b>.',
+    checks: [
+      { id: 'perm', t: 'Prohlížeč se zeptal na mikrofon a povolení platí', auto: () => Mic.diag.perm === 'granted' },
+      { id: 'model', t: 'Model rozpoznávání se stáhne a načte', auto: () => ASR.state === 'ready' },
+      { id: 'webgpu', t: 'Rozpoznávání běží na WebGPU (ne na záložním WASM)', auto: () => ASR.state === 'ready' && ASR.device === 'webgpu' },
+      { id: 'self', t: 'Samotest bez mikrofonu pokyn správně rozpozná', auto: () => (Voice.selfOk || 0) > 0 },
+      { id: 'pttbtn', t: 'PTT tlačítkem na obrazovce (prst nebo Pencil)', auto: () => !!(Voice.stats.src.touch || Voice.stats.src.pen || Voice.stats.src.mouse) },
+      { id: 'pttkey', t: 'PTT mezerníkem na klávesnici', auto: () => !!Voice.stats.src.key },
+      { id: 'pedal', t: 'PTT pedálem (po naučení klávesy)', auto: () => !!Voice.stats.src.pedal },
+      { id: 'recog', t: 'Rozpoznaný text odpovídá tomu, co jsem řekl' },
+      { id: 'exec', t: 'Pilot pokyn zopakuje a letadlo ho provede', auto: () => Voice.stats.ok > 0 },
+      { id: 'sayagain', t: 'Při nesrozumitelném pokynu pilot požádá o zopakování', auto: () => Voice.stats.sayAgain + Voice.stats.ambiguous > 0 },
+      { id: 'latency', t: 'Odezva od puštění PTT po odpověď pilota je přijatelná' },
+      { id: 'playback', t: 'Hlasy pilotů a tóny po vysílání hrají normálně nahlas' },
+    ],
+    auto: () => {
+      const g = ASR.gpu, i = ASR.info || {}, lat = Voice.latencies(), st = Voice.stats;
+      return [['Mikrofon', Mic.diag.perm, Mic.diag.perm === 'granted' ? 'ok' : Mic.diag.perm === 'denied' ? 'bad' : ''],
+        ['Zachytávání', Mic.diag.opens ? `${Mic.diag.track} · otevření ${Mic.diag.openMs} ms` : '–'],
+        ['Audio session', Mic.diag.session],
+        ['WebGPU', g ? (g.ok ? `ano · ${g.desc}${g.f16 ? ' · f16' : ''}` : 'ne · ' + g.why) : 'zjišťuje se', g ? (g.ok ? 'ok' : 'warn') : ''],
+        ['Model', ASR.label(), ASR.state === 'ready' ? 'ok' : ASR.state === 'error' ? 'bad' : ASR.state === 'loading' ? 'warn' : ''],
+        ['Stahování', ASR.state === 'loading' || ASR.downloaded() ? `${(ASR.downloaded() / 1e6).toFixed(0)} MB (${Math.round(ASR.progress() * 100)} %)` : '–'],
+        ['WebGPU selhalo, WASM', ASR.fallback || '–', ASR.fallback ? 'warn' : ''],
+        ['Načtení / zahřátí', i.loadMs ? `${(i.loadMs / 1000).toFixed(1)} s / ${(i.warmMs / 1000).toFixed(1)} s` : '–'],
+        ['Odezva ASR', lat.length ? `poslední ${lat.length ? (Voice.history.find(h => h.wall) || {}).wall : '–'} ms · medián ${lat[Math.floor(lat.length / 2)]} ms` : '–'],
+        ['Relace', `${st.tx} · ok ${st.ok} · say again ${st.sayAgain} · znak? ${st.ambiguous + st.noCs} · ticho ${st.empty} · blok ${st.blocked} · chyby ${st.errors}`],
+        ['PTT klávesy', 'Space' + (Voice.key ? ' + ' + (Voice.key.code || Voice.key.key) : '')]];
+    },
+    actions(box) {
+      const seg = (label, items, cur, fn) => { const r = el('div', { class: 'seg-row', role: 'group', 'aria-label': label }); for (const [k, t] of items) r.append(el('button', { 'aria-pressed': String(cur === k), onclick: () => { fn(k); App.renderChecks(); } }, t)); return [el('div', { class: 'label-sm', text: label }), r]; };
+      const mb = (m) => { const M = ASR_MODELS[m].mb; return el('span', {}, m, el('br'), el('small', { text: `${M.wasm}/${M.webgpu}` })); };
+      box.append(...seg('Model (MB pro WASM/WebGPU)', [['tiny.en', mb('tiny.en')], ['base.en', mb('base.en')], ['small.en', mb('small.en')]], ASR.pref.model, (k) => ASR.setPref('model', k)));
+      box.append(...seg('Zařízení', [['auto', 'Auto'], ['webgpu', 'WebGPU'], ['wasm', 'WASM']], ASR.pref.device, (k) => ASR.setPref('device', k)));
+      const load = el('button', { class: 'btn primary', onclick: () => { ASR.load().then(() => toast('Model je načtený.'), (e) => toast('Model se nenačetl: ' + e.message, 5000)); } }, 'Načíst / přepnout model');
+      const self = el('button', { class: 'btn', onclick: async () => { self.disabled = true; try { const r = await Voice.selfTest(); const ok = r.got === r.expect; if (ok) Voice.selfOk = (Voice.selfOk || 0) + 1; toast(`${ok ? 'Samotest OK' : 'Samotest nesedí'}: čekáno ${r.expect}, rozpoznáno ${r.got} (${r.ms} ms)`, 5000); } catch (e) { toast('Samotest selhal: ' + e.message, 5000); } self.disabled = false; App.refreshChecks(); } }, 'Samotest bez mikrofonu');
+      const learn = el('button', { class: 'btn', onclick: () => Voice.learn() }, Voice.key ? `PTT pedál: ${Voice.key.code || Voice.key.key} (naučit znovu)` : 'Naučit PTT pedál');
+      const tog = (label, get, set) => el('button', { class: 'btn', 'aria-pressed': String(get()), onclick: () => { set(!get()); App.renderChecks(); } }, `${label}: ${get() ? 'ano' : 'ne'}`);
+      box.append(el('div', { class: 'btn-row' }, load, self), learn,
+        tog('Mikrofon trvale otevřený', () => Mic.keepOpen, (v) => { Mic.keepOpen = v; Store.set('atc.mic.keepOpen', v); if (!v && !Voice.ptt) Mic.close(); }),
+        tog('Potlačení ozvěny a šumu, AGC', () => Mic.processing, (v) => { Mic.processing = v; Store.set('atc.mic.processing', v); if (!Voice.ptt) Mic.close(); }),
+        tog('Prompt s volacími znaky', () => Voice.usePrompt, (v) => Voice.set('usePrompt', v)),
+        tog('PTT tlačítko vlevo', () => document.body.classList.contains('ptt-left'), (v) => { document.body.classList.toggle('ptt-left', v); Store.set('atc.voice.pttLeft', v); }));
+    },
+    mount(v) {
+      const wrap = el('div', { class: 'canvas-wrap with-dock' }); v.append(wrap);
+      this.view = new RadarView(wrap, App.sim, { onCommand: (ac, cmds) => App.comms.atc(ac, cmds), gestures: true, scale: 6.2 });
+      App.radars.push(this.view); new RadioLog(v).el.classList.add('top'); pttControl(v);
+      const panel = el('div', { class: 'vpanel' }); v.append(panel);
+      const render = () => {
+        panel.innerHTML = '';
+        panel.append(el('div', { class: 'vrow head' }, el('span', { text: 'TIME' }), el('span', { text: 'REC' }), el('span', { text: 'ASR' }), el('span', { text: 'HEARD' }), el('span', { text: 'RESULT' })));
+        if (!Voice.history.length) panel.append(el('div', { class: 'vrow empty', text: 'No transmissions yet. Hold PTT and speak, or run the self-test.' }));
+        for (const h of Voice.history) panel.append(el('div', { class: 'vrow' + (h.err ? ' err' : /SAY AGAIN|\?|NO SPEECH|BLOCKED/.test(h.outcome || '') ? ' warn' : '') },
+          el('span', { text: hhmmss(h.t || 0) }), el('span', { text: h.dur ? h.dur.toFixed(1) + ' s' : '–' }), el('span', { text: h.wall ? h.wall + ' ms' : '–' }),
+          el('span', { class: 'heard', text: h.text ? `“${h.text}”` : '–' }), el('span', { text: (h.outcome || '') + (h.conf ? ` · ${Math.round(h.conf * 100)} %` : '') })));
+      };
+      App.on('voice', render); render();
+      ASR.probeGpu(); Mic.perm();
     },
     draw(now) { this.view.draw(now); },
   },

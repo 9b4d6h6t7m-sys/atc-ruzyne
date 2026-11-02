@@ -39,7 +39,7 @@ function buildShell() {
   App.speedBtns = sp.map(([v, label, aria]) => { const b = el('button', { 'aria-label': aria || `Rychlost ${v}×`, onclick: () => setSpeed(v) }, label); seg.append(b); return { v, b }; });
   App.audioBtn = el('button', { class: 'tb-btn', onclick: () => { Sound.unlock(); } }, 'Zapnout zvuk');
   App.fpsEl = el('span', { class: 'fps', text: '– fps' });
-  tb.append(navBtn, el('div', { class: 'brand' }, el('b', { text: 'LKPR · ATC' }), el('span', { text: 'test funkcí v0.3' })), App.clockEl, seg, el('div', { class: 'tb-spacer' }), App.fpsEl, App.audioBtn, el('button', { class: 'tb-btn primary', onclick: () => App.show('results') }, 'Výsledky'));
+  tb.append(navBtn, el('div', { class: 'brand' }, el('b', { text: 'LKPR · ATC' }), el('span', { text: 'test funkcí v0.4' })), App.clockEl, seg, el('div', { class: 'tb-spacer' }), App.fpsEl, App.audioBtn, el('button', { class: 'tb-btn primary', onclick: () => App.show('results') }, 'Výsledky'));
   // nav
   App.navEl = el('nav', { id: 'testnav', 'aria-label': 'Testy' });
   App.stage = el('main', { id: 'stage' });
@@ -110,13 +110,14 @@ App.show = function (id) {
 };
 App.resultText = function () {
   const ipad = /iPad/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
-  const L = ['ATC Ruzyně · test funkcí v0.3 · výsledky', `Datum: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+  const L = ['ATC Ruzyně · test funkcí v0.4 · výsledky', `Datum: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
     `Zařízení: ${ipad ? 'iPad' : navigator.platform}, okno ${innerWidth}×${innerHeight}, DPR ${devicePixelRatio}, dotykové body ${navigator.maxTouchPoints || 0}`,
     `Vstupy: dotyk ${this.inputs.touch}, pero ${this.inputs.pen} (hover ${this.inputs.penHover}, max. přítlak ${this.inputs.maxPressure.toFixed(2)}), myš ${this.inputs.mouse} (hover ${this.inputs.mouseHover}), klávesy ${this.keys.length}`,
     `Zvuk: syntéza ${Sound.ttsOk ? 'ano' : 'ne'}, hlasů ${Sound.voices.length}, jazyky ${[...new Set(Sound.voices.map(v => v.lang))].join(' ') || '–'}, přehráno ${Sound.ttsEvents.end}, chyb ${Sound.ttsEvents.error}`,
     `Zvukový systém: stav ${Sound.status()}, kontext ${Sound.ctx ? Sound.ctx.state : '–'}, audioSession ${Sound.diag.session}, médium ${Sound.diag.media}, odemknutí ${Sound.diag.unlocks}, obnovení ${Sound.diag.resumes} (selhalo ${Sound.diag.resumeFails}), zahozené zvuky ${Sound.diag.dropped}`,
     `Hlasové balíčky: načteno ${VoicePack.stats.loaded.join(' ') || '–'}, relací z balíčků ${VoicePack.stats.pack}, hlasem zařízení ${VoicePack.stats.device}, chybějící slova ${Object.keys(VoicePack.stats.missing).join(' ') || '–'}${VoicePack.stats.loadErr ? ', chyby načtení ' + VoicePack.stats.lastErr : ''} · výkon: ${this.perfResult ? `${this.perfResult.avg.toFixed(0)} fps průměr, ${this.perfResult.min.toFixed(0)} fps minimum, ${this.perfResult.n} letadel` : 'neměřeno'}`,
-    `Úložiště: localStorage ${Store.ok ? 'ano' : 'ne'}, IndexedDB ${this.idbStatus || '–'}, spuštění ${this.launches}, přechody na pozadí ${this.hiddenCount}`, ''];
+    `Úložiště: localStorage ${Store.ok ? 'ano' : 'ne'}, IndexedDB ${this.idbStatus || '–'}, spuštění ${this.launches}, přechody na pozadí ${this.hiddenCount}`,
+    ...voiceReport(), ''];
   TESTS.forEach((t, i) => {
     if (t.summary) return; const r = this.results[t.id] || {};
     L.push(`[${i + 1}] ${t.name}`);
@@ -125,6 +126,17 @@ App.resultText = function () {
   });
   return L.join('\n');
 };
+
+/* Voice control summary for the results report: backend, timings and the last transcripts (for tuning the parser). */
+function voiceReport() {
+  const st = Voice.stats, i = ASR.info || {}, g = ASR.gpu, lat = Voice.latencies();
+  const L = [`Hlasové ovládání: model ${ASR.label()}${ASR.fallback ? ` (WebGPU selhalo: ${ASR.fallback})` : ''}, WebGPU ${g ? (g.ok ? 'ano ' + g.desc + (g.f16 ? ' f16' : '') : 'ne (' + g.why + ')') : '–'}, načtení ${i.loadMs ? (i.loadMs / 1000).toFixed(1) + ' s' : '–'}, zahřátí ${i.warmMs ? (i.warmMs / 1000).toFixed(1) + ' s' : '–'}, prompt ${Voice.usePrompt ? 'ano' : 'ne'}`,
+    `Mikrofon: ${Mic.diag.perm}, ${Mic.diag.track}, otevření ${Mic.diag.openMs} ms (${Mic.diag.opens}×), trvale otevřený ${Mic.keepOpen ? 'ano' : 'ne'}, EC/NS/AGC ${Mic.processing ? 'ano' : 'ne'}, audioSession ${Mic.diag.session}${Mic.diag.err ? ', chyba ' + Mic.diag.err : ''}; PTT ${Object.entries(st.src).map(([k, v]) => k + ' ' + v).join(', ') || '–'}${Voice.key ? ', pedál ' + (Voice.key.code || Voice.key.key) : ''}`,
+    `Relace: ${st.tx}, provedeno ${st.ok}, say again ${st.sayAgain}, nejasný znak ${st.ambiguous}, bez znaku ${st.noCs}, ticho ${st.empty}, blokováno ${st.blocked}, PTT puštěno před otevřením mikrofonu ${st.cut}, chyby ${st.errors}, samotest ${Voice.selfOk || 0}/${st.selfTests || 0}; odezva ASR medián ${lat.length ? lat[Math.floor(lat.length / 2)] + ' ms' : '–'}`];
+  // per transmission: audio length / PTT hold time, ASR wall time (features + decoder), transcript, outcome
+  for (const h of Voice.history.slice(0, 12)) L.push(`  ${hhmmss(h.t || 0)} ${h.dur ? h.dur.toFixed(1) + (h.hold ? '/' + h.hold.toFixed(1) : '') + ' s' : ''} ${h.wall ? h.wall + ' ms' + (h.ms && h.ms.gen ? ` (${h.ms.feat}+${h.ms.gen})` : '') : ''} "${h.text || ''}" -> ${h.outcome || ''}${h.conf ? ' (' + Math.round(h.conf * 100) + ' %)' : ''}`);
+  return L;
+}
 
 /* ---------- demo world ---------- */
 function setupWorld() {
@@ -194,10 +206,18 @@ function boot() {
   // Audio may only start inside a user gesture. Keep trying on every gesture until the context really runs (iOS suspends it after backgrounding).
   const unlockHook = () => { if (!Sound.live()) Sound.unlock(); };
   for (const ev of ['touchend', 'click', 'keydown', 'pointerup']) window.addEventListener(ev, unlockHook, true);
-  window.addEventListener('pagehide', () => Sound.onHidden());
+  window.addEventListener('pagehide', () => { Voice.up(); Sound.onHidden(); });
+  window.addEventListener('blur', () => Voice.up()); // a key released outside the window never sends keyup
+  // Push-to-talk keys (Space, learned pedal key) are handled in the capture phase, before text fields and shortcuts.
+  window.addEventListener('keydown', (e) => { if (Voice.keydown(e)) App.feature('pttKey', e.code); }, true);
+  window.addEventListener('keyup', (e) => { Voice.keyup(e); }, true);
+  App.on('voice', () => App.refreshChecksSoon()); App.on('asr', () => App.refreshChecksSoon());
+  App.on('asr', () => { if (ASR.state === 'ready') Store.set('atc.asr.auto', true); });
+  Mic.perm(); ASR.probeGpu(); document.body.classList.toggle('ptt-left', !!Store.get('atc.voice.pttLeft', false));
+  if (Store.get('atc.asr.auto', false)) setTimeout(() => ASR.load().catch(() => {}), 2500); // model used before: load it from the browser cache
   window.addEventListener('pageshow', () => Sound.onVisible());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { App.hiddenCount++; if (!App.paused) { setSpeed(0); App.autoPaused = true; } Sound.onHidden(); return; }
+    if (document.hidden) { App.hiddenCount++; Voice.up(); if (!App.paused) { setSpeed(0); App.autoPaused = true; } Sound.onHidden(); return; }
     Sound.onVisible();
     if (App.autoPaused) { App.autoPaused = false; toast('Simulace se pozastavila, když byla aplikace na pozadí. Pokračuj tlačítkem 1×. Zvuk se obnoví prvním klepnutím.', 4200); App.refreshChecks(); }
   });
@@ -205,7 +225,7 @@ function boot() {
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     App.keySeen(e);
-    if (e.key === ' ') { e.preventDefault(); setSpeed(0); return; }
+    if ((e.key === 'p' || e.key === 'P') && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); setSpeed(0); return; } // Space is push-to-talk
     if (e.key === 'Escape') { App.radars.forEach(r => r.select(null)); return; }
     if (e.key.length === 1 && /[a-z0-9]/i.test(e.key) && !e.metaKey && !e.ctrlKey) {
       const inp = App.cmdInputs.find(i => i.offsetParent !== null);
