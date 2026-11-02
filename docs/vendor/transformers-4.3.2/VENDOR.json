@@ -12,6 +12,12 @@
    "integrity": "sha512-Iy7rtadoBgxS/LLvDr3QW38DB1PNXRnr0GJMcL0TAt7c9qjgVQl83UlGCVyeAnK2InpmW8Uc3PL8XIuqtDeF6g==",
    "license": "MIT",
    "commit": "8d85527a010e294a26b274749f74294b2a32cec5"
+  },
+  "phonemizer": {
+   "version": "1.2.1",
+   "tarball": "https://registry.npmjs.org/phonemizer/-/phonemizer-1.2.1.tgz",
+   "integrity": "sha512-v0KJ4mi2T4Q7eJQ0W15Xd4G9k4kICSXE8bpDeJ8jisL4RyJhNWsweKTOi88QXFc4r4LZlz5jVL5lCHhkpdT71A==",
+   "license": "Apache-2.0"
   }
  },
  "files": {
@@ -21,7 +27,10 @@
   "ort-wasm-simd-threaded.asyncify.wasm": "49871f5a4409519797e127440868a6d1923339d9185907f301a5b2a1d90af082",
   "ort-wasm-simd-threaded.mjs": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f",
   "ort-wasm-simd-threaded.wasm": "06ba057753da3847e4c24f02d91ab133455b0817c69a44993a9a53a2146df9e3",
-  "LICENSE.onnxruntime.txt": "c8a70aa8a54acf7e1a6154a8860cc983c1535f6bb80f13a7e783d234ec71c81e"
+  "ort.wasm.bundle.min.mjs": "17b52c1ac62b421dc508b4c28b9a9675251c6e25dd512ef54b83a5e2c4242869",
+  "LICENSE.onnxruntime.txt": "c8a70aa8a54acf7e1a6154a8860cc983c1535f6bb80f13a7e783d234ec71c81e",
+  "phonemizer.js": "193481f474f7c1ea81df3195d18b45df8ef7254dbdccb3f193d60215c4897bec",
+  "LICENSE.phonemizer.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
  },
  "patched": {
   "transformers.min.js": {

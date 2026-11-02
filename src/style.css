@@ -261,3 +261,4 @@ body.ptt-left .ptt { right: auto; left: 12px; flex-direction: row-reverse; }
 .vrow .heard { color: #eef6ff; overflow-wrap: anywhere; }
 .vrow.warn { color: var(--warn); }
 .vrow.err { color: var(--bad); }
+.llm-line { font-family: var(--font-mono); font-size: 13px; color: #cfe3f7; margin: 6px 0 2px; overflow-wrap: anywhere; }

@@ -5,10 +5,11 @@ Statická webová aplikace pro iPad (Safari, ideálně přidaná na plochu), hos
 
 Hra: https://9b4d6h6t7m-sys.github.io/atc-ruzyne/
 
-Aktuální stav: v0.4 – test funkcí (radar APP, A‑SMGCS a výhled z věže, stripy, hlasy pilotů,
-zadávání povelů, hlasové ovládání, výstrahy). Hlasové ovládání: PTT (tlačítko, mezerník, pedál),
-rozpoznávání řeči Whisper přímo v zařízení (WebGPU, záložně WASM), piloti zopakují pokyn, nebo
-požádají o „say again“. Připravují se AI piloti.
+Aktuální stav: v0.5 – test funkcí (radar APP, A‑SMGCS a výhled z věže, stripy, hlasy pilotů,
+zadávání povelů, hlasové ovládání, měření AI modelu, výstrahy). Hlasové ovládání: PTT (tlačítko,
+mezerník, pedál), rozpoznávání řeči Whisper přímo v zařízení (WebGPU, záložně WASM), piloti zopakují
+pokyn, nebo požádají o „say again“. Piloti mluví neurálními hlasy syntetizovanými přímo v zařízení
+(Piper). Připravují se AI piloti.
 
 ## Struktura
 
@@ -20,7 +21,7 @@ požádají o „say again“. Připravují se AI piloti.
 
 Sestavení: `python3 tools/build.py`, test: `python3 tools/functest.py`.
 
-Modely rozpoznávání řeči (Whisper, Hugging Face `onnx-community`) se stahují při prvním použití
-a zůstávají v mezipaměti prohlížeče.
+Modely rozpoznávání řeči (Whisper, Hugging Face `onnx-community`) a hlasů pilotů (Piper,
+`rhasspy/piper-voices`) se stahují při prvním použití a zůstávají v mezipaměti prohlížeče.
 
 Data jsou zjednodušená pro výcvikovou hru a nejsou určena k navigaci.

@@ -144,9 +144,12 @@ const Sound = {
       } catch (e) { fin(); }
     });
   },
-  /* Pilot transmission: voice pack first, device voice as the fallback (hybrid). */
+  /* Pilot transmission: synthesised voice (PilotTTS), then the voice pack, then the device voice. */
   async transmit(text, cs) {
-    if (this.enabled && cs && VoicePack.enabled && this.ctx && !document.hidden) { try { if (await VoicePack.speak(text, cs)) return; } catch (e) {} }
+    if (this.enabled && cs && this.ctx && !document.hidden) {
+      if (PilotTTS.enabled) { try { if (await PilotTTS.speak(text, cs)) return; } catch (e) {} PilotTTS.stats.fallback++; }
+      if (VoicePack.enabled) { try { if (await VoicePack.speak(text, cs)) return; } catch (e) {} }
+    }
     return this.say(text, cs ? this.profileFor(cs) : null);
   },
   stopAll() { try { speechSynthesis.cancel(); } catch (e) {} this.noiseOff(true); },

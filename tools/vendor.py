@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Vendor the speech-recognition runtime into docs/vendor/ (served by GitHub Pages next to the app).
+"""Vendor the speech runtime into docs/vendor/ (served by GitHub Pages next to the app).
 
-Pinned: @huggingface/transformers (browser bundle) and the exact onnxruntime-web build it depends on
-(its WASM binaries; transformers.js would otherwise fetch them from jsDelivr at runtime).
+Pinned: @huggingface/transformers (browser bundle, Whisper) and the exact onnxruntime-web build it depends on
+(its WASM binaries; transformers.js would otherwise fetch them from jsDelivr at runtime; the standalone WASM
+bundle runs the Piper pilot voices in tts-worker.js), and phonemizer (espeak-ng compiled to WASM: text ->
+IPA phonemes for Piper).
 The npm tarballs are verified against the registry's sha512 integrity; VENDOR.json records the sha256 of
 every vendored file.
 
@@ -18,6 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORK = pathlib.Path(os.environ.get('ATC_WORK', ROOT / '.work'))
 REGISTRY = 'https://registry.npmjs.org/'
 TRANSFORMERS = '4.3.2'
+PHONEMIZER = '1.2.1'
 DEST = ROOT / 'docs' / 'vendor' / f'transformers-{TRANSFORMERS}'
 # file in the package -> name in DEST
 FILES = {
@@ -26,7 +29,9 @@ FILES = {
     'onnxruntime-web': {'package/dist/ort-wasm-simd-threaded.asyncify.mjs': 'ort-wasm-simd-threaded.asyncify.mjs',
                         'package/dist/ort-wasm-simd-threaded.asyncify.wasm': 'ort-wasm-simd-threaded.asyncify.wasm',
                         'package/dist/ort-wasm-simd-threaded.mjs': 'ort-wasm-simd-threaded.mjs',
-                        'package/dist/ort-wasm-simd-threaded.wasm': 'ort-wasm-simd-threaded.wasm'},
+                        'package/dist/ort-wasm-simd-threaded.wasm': 'ort-wasm-simd-threaded.wasm',
+                        'package/dist/ort.wasm.bundle.min.mjs': 'ort.wasm.bundle.min.mjs'},  # standalone ORT (WASM EP) for tts-worker.js
+    'phonemizer': {'package/dist/phonemizer.js': 'phonemizer.js', 'package/LICENSE': 'LICENSE.phonemizer.txt'},
 }
 
 
@@ -77,11 +82,13 @@ def main():
     tv, turl, tint, tdata = tarball('@huggingface/transformers', TRANSFORMERS)
     ort_version = tv['dependencies']['onnxruntime-web']  # transformers.js pins an exact build
     ov, ourl, oint, odata = tarball('onnxruntime-web', ort_version)
+    pv, purl, pint, pdata = tarball('phonemizer', PHONEMIZER)
     if DEST.exists():
         shutil.rmtree(DEST)
     DEST.mkdir(parents=True)
     files, sources, patched = {}, {}, {}
-    for (name, version, url, integ, data) in [('@huggingface/transformers', TRANSFORMERS, turl, tint, tdata), ('onnxruntime-web', ort_version, ourl, oint, odata)]:
+    for (name, version, url, integ, data) in [('@huggingface/transformers', TRANSFORMERS, turl, tint, tdata), ('onnxruntime-web', ort_version, ourl, oint, odata),
+                                              ('phonemizer', PHONEMIZER, purl, pint, pdata)]:
         sources[name] = {'version': version, 'tarball': url, 'integrity': integ}
         with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as tf:
             for member, out in FILES[name].items():
@@ -102,7 +109,7 @@ def main():
             (DEST / 'LICENSE.onnxruntime.txt').write_text(note); files['LICENSE.onnxruntime.txt'] = sha256(note.encode())
     (DEST / 'VENDOR.json').write_text(json.dumps({'sources': sources, 'files': files, 'patched': patched}, indent=1) + '\n')
     total = sum((DEST / f).stat().st_size for f in files)
-    print(f'vendored transformers {TRANSFORMERS} + onnxruntime-web {ort_version}: {len(files)} files, {total / 1e6:.1f} MB -> {DEST.relative_to(ROOT)}')
+    print(f'vendored transformers {TRANSFORMERS} + onnxruntime-web {ort_version} + phonemizer {PHONEMIZER}: {len(files)} files, {total / 1e6:.1f} MB -> {DEST.relative_to(ROOT)}')
     check()
 
 

@@ -146,11 +146,16 @@ async def main():
             st = await page.evaluate("(() => { const a = App.sim.find('TVS35J'); return {mode: a.mode, tgt: Math.round(toMag(a.tgtHdg))}; })()")
             check('Dial tap issues heading ~090', st['mode'] == 'hdg' and abs(st['tgt'] - 90) <= 10, st)
         # drag a label with the mouse
-        lb = await page.evaluate("(() => { const r = App.radars[0]; r.select(null); const h = r.hits.find(h => h.kind==='label' && h.ac.cs==='RYR8YD'); const b = r.canvas.getBoundingClientRect(); return h ? {x: b.left + h.x + 8, y: b.top + h.y + 6, off: {...h.ac.labelOff}} : null; })()")
+        # Pilot voice models load in the background after the first gesture; under that load headless input arrives late and a
+        # press held > 330 ms before moving becomes a vector gesture by design, so wait for the models before timing-sensitive drags.
+        await page.wait_for_function("Object.values(PilotTTS.models).every(s => s.state !== 'loading')", timeout=180000)
+        # a label whose grab point is on the radar canvas itself (not under the PTT button, radio log or command line)
+        lb = await page.evaluate("(() => { const r = App.radars[0]; r.select(null); const b = r.canvas.getBoundingClientRect(); for (const h of r.hits.filter(h => h.kind === 'label')) { const x = b.left + h.x + 8, y = b.top + h.y + 6; if (document.elementFromPoint(x, y) === r.canvas && document.elementFromPoint(x + 40, y + 30) === r.canvas) return {x, y, cs: h.ac.cs, off: {...h.ac.labelOff}}; } return null; })()")
+        check('A radar label is free to grab', lb is not None)
         if lb:
             await page.mouse.move(lb['x'], lb['y']); await page.mouse.down(); await page.mouse.move(lb['x'] + 40, lb['y'] + 30, steps=6); await page.mouse.up()
-            off = await page.evaluate("({...App.sim.find('RYR8YD').labelOff})")
-            check('Mouse drag moves label', abs(off['dx'] - lb['off']['dx'] - 40) < 4, (lb['off'], off))
+            off = await page.evaluate(f"({{...App.sim.find('{lb['cs']}').labelOff}})")
+            check('Mouse drag moves label', abs(off['dx'] - lb['off']['dx'] - 40) < 4, (lb, off))
         sc0 = await page.evaluate("App.radars[0].scale"); await page.mouse.move(600, 400); await page.mouse.wheel(0, -300); await page.wait_for_timeout(100)
         sc1 = await page.evaluate("App.radars[0].scale"); check('Wheel zooms in', sc1 > sc0, (sc0, sc1))
         # keyboard: type with nothing focused -> command line gets focus
@@ -250,6 +255,26 @@ async def main():
             check('ASR self-test (tiny.en WASM) recognises the instruction', not sr.get('err') and sr.get('got') == sr.get('expect'), sr)
         else:
             print('SKIP ASR self-test: no local model (node tools/asr_eval/browser.js tiny.en gb --limit 1 downloads it)')
+        # ---------- neural pilot voice (Piper, tts-worker.js): synthesis, intelligibility of numbers, use on the radio ----------
+        if (MODELS / 'rhasspy/piper-voices/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx').exists():
+            tt = await page.evaluate('''(async () => {
+              const say = 'descending flight level one two zero, Speedbird eight five two';
+              PilotTTS.enabled = true; PilotTTS.ensure('vctk');
+              for (let i = 0; i < 900 && PilotTTS.models.vctk.state === 'loading'; i++) await new Promise(r => setTimeout(r, 100));
+              const st = PilotTTS.models.vctk.state; if (st !== 'ready') return {st, err: PilotTTS.models.vctk.err};
+              const r = await PilotTTS.prepare(say, 'BAW852'); const dur = r.samples.length / r.sampleRate;
+              const oc = new OfflineAudioContext(1, Math.ceil(dur * 16000) + 1600, 16000); const bf = oc.createBuffer(1, r.samples.length, r.sampleRate);
+              bf.getChannelData(0).set(r.samples); const s = oc.createBufferSource(); s.buffer = bf; s.connect(oc.destination); s.start(0.05);
+              const a16 = (await oc.startRendering()).getChannelData(0).slice();
+              const text = ASR.state === 'ready' ? (await ASR.transcribe(a16, 16000, VoiceParser.prompt(Voice.onFreq(), { rwy: '24' }))).text : null;
+              const n0 = PilotTTS.stats.tts; await Sound.transmit(say, 'BAW852');
+              return {st, voice: r.sp.voice, dur: +dur.toFixed(2), ms: r.wall, text, played: PilotTTS.stats.tts - n0}; })()''')
+            check('Neural pilot voice synthesises a readback', tt.get('st') == 'ready' and 1.5 < tt.get('dur', 0) < 6, tt)
+            dg = re.sub(r'\D', '', tt.get('text') or '')  # Whisper tiny.en is a weak listener: level digits and callsign digits
+            check('Neural voice: Whisper hears the numbers', tt.get('text') is None or '120' in dg or ('12' in dg and '852' in dg), tt)
+            check('Pilot transmission is spoken with the neural voice', tt.get('played') == 1, tt)
+        else:
+            print('SKIP neural voice: no local Piper model in .work/models/rhasspy/piper-voices')
         await page.screenshot(path=f'{WORK}/shots/04_voice.png')
         txt = await page.evaluate("App.resultText()"); check('Result text builds', 'ATC Ruzyně' in txt and '[1] Radar APP' in txt and 'Hlasové ovládání: model' in txt)
         print('\n'.join(txt.split('\n')[:8]))

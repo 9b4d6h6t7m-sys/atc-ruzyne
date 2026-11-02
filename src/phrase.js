@@ -229,10 +229,10 @@ class Comms {
     const text = opts.text || (cmds.length === 1 ? Phrase.atc(ac, cmds[0], this.sim) : Phrase.atc(ac, cmds[0], this.sim) + ', ' + cmds.slice(1).map(c => Phrase.atc(ac, c, this.sim).split(', ').slice(1).join(', ')).join(', '));
     this.log('atc', text, opts.note);
     if (cmds.some(c => c.type === 'assume')) ac.ctl = 'own';
-    const rb = Phrase.readback(ac, cmds, this.sim);
+    const rb = Phrase.readback(ac, cmds, this.sim); PilotTTS.prepare(rb.say, ac.cs); // synthesised while the pilot "thinks"
     this.queue.push({ ac, due: this.sim.t + (opts.delay ?? rnd(1.4, 3.0)), text: rb.text, say: rb.say, apply: () => cmds.forEach(c => ac.command(c, this.sim)) });
   }
-  pilot(ac, text, say, delay = 0) { this.queue.push({ ac, due: this.sim.t + delay, text, say, call: true }); }
+  pilot(ac, text, say, delay = 0) { if (ac) PilotTTS.prepare(say, ac.cs); this.queue.push({ ac, due: this.sim.t + delay, text, say, call: true }); }
   /* Last pilot transmission (of one aircraft, or on the frequency), for "say again". */
   lastPilot(ac) { const l = ac ? ac.lastTx : this.lastTx; return l && !l.ac.done ? l : null; }
   /* Controller push-to-talk: the frequency is busy, no pilot starts transmitting meanwhile. */

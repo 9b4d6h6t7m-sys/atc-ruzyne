@@ -15,10 +15,10 @@ SRC = ROOT / 'src'
 DOCS = ROOT / 'docs'
 
 # Order matters: every file defines globals used by the files after it.
-ORDER = ['data.js', 'core.js', 'sim.js', 'phrase.js', 'voiceparse.js', 'audio.js', 'voicepack.js', 'voice.js', 'radar.js',
+ORDER = ['data.js', 'core.js', 'sim.js', 'phrase.js', 'voiceparse.js', 'audio.js', 'voicepack.js', 'tts.js', 'voice.js', 'llm.js', 'radar.js',
          'ground.js', 'window.js', 'strips.js', 'tests.js', 'app.js']
 # Served as separate files next to index.html.
-COPY = ['asr-worker.js', 'mic-worklet.js']
+COPY = ['asr-worker.js', 'mic-worklet.js', 'tts-worker.js', 'llm-worker.js']
 
 asset = {}
 for n in COPY:

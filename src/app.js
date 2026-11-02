@@ -39,7 +39,7 @@ function buildShell() {
   App.speedBtns = sp.map(([v, label, aria]) => { const b = el('button', { 'aria-label': aria || `Rychlost ${v}×`, onclick: () => setSpeed(v) }, label); seg.append(b); return { v, b }; });
   App.audioBtn = el('button', { class: 'tb-btn', onclick: () => { Sound.unlock(); } }, 'Zapnout zvuk');
   App.fpsEl = el('span', { class: 'fps', text: '– fps' });
-  tb.append(navBtn, el('div', { class: 'brand' }, el('b', { text: 'LKPR · ATC' }), el('span', { text: 'test funkcí v0.4' })), App.clockEl, seg, el('div', { class: 'tb-spacer' }), App.fpsEl, App.audioBtn, el('button', { class: 'tb-btn primary', onclick: () => App.show('results') }, 'Výsledky'));
+  tb.append(navBtn, el('div', { class: 'brand' }, el('b', { text: 'LKPR · ATC' }), el('span', { text: 'test funkcí v0.5' })), App.clockEl, seg, el('div', { class: 'tb-spacer' }), App.fpsEl, App.audioBtn, el('button', { class: 'tb-btn primary', onclick: () => App.show('results') }, 'Výsledky'));
   // nav
   App.navEl = el('nav', { id: 'testnav', 'aria-label': 'Testy' });
   App.stage = el('main', { id: 'stage' });
@@ -48,7 +48,7 @@ function buildShell() {
   document.body.append(app, el('div', { id: 'toast', role: 'status' }), el('div', { id: 'rotate-hint', text: 'Otoč iPad na šířku, rozvržení je navržené pro orientaci na šířku.' }));
   for (const c of ['tl', 'tr', 'bl', 'br']) document.body.append(el('div', { class: 'corner ' + c, 'aria-hidden': 'true' }));
   document.body.classList.add('corners-off');
-  App.on('audio', () => { const st = Sound.status(); if (st === 'on' && !App._vpPreloaded) { App._vpPreloaded = true; VoicePack.preload(App.sim.ac.map(a => a.cs).concat(['TVS35J', 'EZY452', 'BAW852'])); } App.audioBtn.textContent = st === 'on' ? 'Zvuk zapnutý' : st === 'paused' ? 'Obnovit zvuk' : 'Zapnout zvuk'; App.audioBtn.classList.toggle('on', st === 'on'); App.audioBtn.classList.toggle('warn', st === 'paused'); App.refreshChecksSoon(); });
+  App.on('audio', () => { const st = Sound.status(); if (st === 'on' && !App._vpPreloaded) { App._vpPreloaded = true; VoicePack.preload(App.sim.ac.map(a => a.cs).concat(['TVS35J', 'EZY452', 'BAW852'])); PilotTTS.preload(App.sim.ac.map(a => a.cs)); } App.audioBtn.textContent = st === 'on' ? 'Zvuk zapnutý' : st === 'paused' ? 'Obnovit zvuk' : 'Zapnout zvuk'; App.audioBtn.classList.toggle('on', st === 'on'); App.audioBtn.classList.toggle('warn', st === 'paused'); App.refreshChecksSoon(); });
 }
 function svgIcon(kind) {
   const ns = 'http://www.w3.org/2000/svg'; const s = document.createElementNS(ns, 'svg'); s.setAttribute('width', '18'); s.setAttribute('height', '18'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
@@ -110,14 +110,15 @@ App.show = function (id) {
 };
 App.resultText = function () {
   const ipad = /iPad/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
-  const L = ['ATC Ruzyně · test funkcí v0.4 · výsledky', `Datum: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+  const L = ['ATC Ruzyně · test funkcí v0.5 · výsledky', `Datum: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
     `Zařízení: ${ipad ? 'iPad' : navigator.platform}, okno ${innerWidth}×${innerHeight}, DPR ${devicePixelRatio}, dotykové body ${navigator.maxTouchPoints || 0}`,
     `Vstupy: dotyk ${this.inputs.touch}, pero ${this.inputs.pen} (hover ${this.inputs.penHover}, max. přítlak ${this.inputs.maxPressure.toFixed(2)}), myš ${this.inputs.mouse} (hover ${this.inputs.mouseHover}), klávesy ${this.keys.length}`,
     `Zvuk: syntéza ${Sound.ttsOk ? 'ano' : 'ne'}, hlasů ${Sound.voices.length}, jazyky ${[...new Set(Sound.voices.map(v => v.lang))].join(' ') || '–'}, přehráno ${Sound.ttsEvents.end}, chyb ${Sound.ttsEvents.error}`,
     `Zvukový systém: stav ${Sound.status()}, kontext ${Sound.ctx ? Sound.ctx.state : '–'}, audioSession ${Sound.diag.session}, médium ${Sound.diag.media}, odemknutí ${Sound.diag.unlocks}, obnovení ${Sound.diag.resumes} (selhalo ${Sound.diag.resumeFails}), zahozené zvuky ${Sound.diag.dropped}`,
     `Hlasové balíčky: načteno ${VoicePack.stats.loaded.join(' ') || '–'}, relací z balíčků ${VoicePack.stats.pack}, hlasem zařízení ${VoicePack.stats.device}, chybějící slova ${Object.keys(VoicePack.stats.missing).join(' ') || '–'}${VoicePack.stats.loadErr ? ', chyby načtení ' + VoicePack.stats.lastErr : ''} · výkon: ${this.perfResult ? `${this.perfResult.avg.toFixed(0)} fps průměr, ${this.perfResult.min.toFixed(0)} fps minimum, ${this.perfResult.n} letadel` : 'neměřeno'}`,
     `Úložiště: localStorage ${Store.ok ? 'ano' : 'ne'}, IndexedDB ${this.idbStatus || '–'}, spuštění ${this.launches}, přechody na pozadí ${this.hiddenCount}`,
-    ...voiceReport(), ''];
+    `Neurální hlasy: ${PilotTTS.enabled ? 'zapnuto' : 'vypnuto'}, modely ${PilotTTS.label()}${Object.values(PilotTTS.models).filter(s => s.ms).map(s => '').length ? ', načtení ' + Object.entries(PilotTTS.models).filter(([, s]) => s.ms).map(([m, s]) => m + ' ' + (s.ms / 1000).toFixed(1) + ' s').join(', ') : ''}, relací ${PilotTTS.stats.tts}, záloha balíčkem ${PilotTTS.stats.fallback}, syntéza medián ${PilotTTS.median('ms') ?? '–'} ms (${PilotTTS.median('rtf') !== null ? PilotTTS.median('rtf').toFixed(2) + '× délky' : '–'})${PilotTTS.stats.lastErr ? ', chyba ' + PilotTTS.stats.lastErr : ''}`,
+    ...voiceReport(), ...LLMBench.results.slice(0, 4).map(r => `AI model: ${LLMBench.line(r)}` + (r.answers || []).map(a => `\n  "${a.q}" -> "${a.text}" (${a.ok ? 'fakta ok' : 'fakta NE'}, ${a.ttft} ms do 1. tokenu, ${a.total} ms celkem)`).join('')), ''];
   TESTS.forEach((t, i) => {
     if (t.summary) return; const r = this.results[t.id] || {};
     L.push(`[${i + 1}] ${t.name}`);
@@ -160,7 +161,7 @@ function maintainWorld() {
     if (sim.ac.filter(a => a.kind === 'dep').length < 4) {
       const al = pick(['EZY', 'TVS', 'RYR', 'WZZ', 'DLH', 'KLM', 'AFR']); const cs = al + Math.floor(rnd(10, 99)) + pick(['ZR', 'K', 'A', 'TX', 'P']);
       const exit = pick(['BALTU', 'VOZ', 'VENOX', 'DOBEN']);
-      const a = spawnDeparture(sim, cs, pick(['A21N', 'A320', 'B38M', 'E190']), exit, 350); VoicePack.preload([cs]);
+      const a = spawnDeparture(sim, cs, pick(['A21N', 'A320', 'B38M', 'E190']), exit, 350); VoicePack.preload([cs]); PilotTTS.preload([cs]);
       App.comms.pilot(a, `Praha Radar, ${Phrase.csText(a)}, passing 1700 feet climbing 5000 feet, ${exit} departure`, `Praha Radar, ${Speak.callsign(a)}, passing one thousand seven hundred feet, climbing five thousand feet, ${Speak.fix(exit)} departure`, 2);
     }
   }
@@ -170,7 +171,7 @@ function maintainWorld() {
   const [a, b, route] = pick(entries); const p = placeOnLeg(a, b, -2);
   const al = pick(['TVS', 'RYR', 'EZY', 'WZZ', 'DLH', 'AFR', 'KLM', 'BAW', 'LOT', 'AUA', 'SWR', 'THY']);
   const cs = al + (Math.floor(rnd(100, 999))) + (Math.random() < 0.5 ? pick(['A', 'B', 'C', 'K', 'M']) : '');
-  VoicePack.preload([cs]);
+  VoicePack.preload([cs]); PilotTTS.preload([cs]);
   sim.add({ cs, type: pick(['A320', 'B38M', 'A21N', 'E190', 'B738', 'A20N']), kind: 'arr', ...p, alt: 15000, cfl: 11000, ias: 280, route, orig: pick(['EGLL', 'EDDF', 'LFPG', 'LIRF', 'EHAM', 'LEMD', 'EPWA', 'LOWW']), dest: 'LKPR', star: a, ctl: 'pend', labelOff: { dx: 34, dy: -34 } });
   App.comms.pilot(sim.find(cs), `Praha Radar, ${Phrase.csText(sim.find(cs))}, FL150 descending FL110, inbound ${a}`, `Praha Radar, ${Speak.callsign(sim.find(cs))}, flight level one five zero, descending flight level one one zero, inbound ${Speak.fix(a)}`, 8);
 }
@@ -211,9 +212,9 @@ function boot() {
   // Push-to-talk keys (Space, learned pedal key) are handled in the capture phase, before text fields and shortcuts.
   window.addEventListener('keydown', (e) => { if (Voice.keydown(e)) App.feature('pttKey', e.code); }, true);
   window.addEventListener('keyup', (e) => { Voice.keyup(e); }, true);
-  App.on('voice', () => App.refreshChecksSoon()); App.on('asr', () => App.refreshChecksSoon());
+  App.on('voice', () => App.refreshChecksSoon()); App.on('asr', () => App.refreshChecksSoon()); App.on('tts', () => App.refreshChecksSoon()); App.on('llm', () => App.refreshChecksSoon()); App.on('llmProgress', () => App.refreshChecksSoon());
   App.on('asr', () => { if (ASR.state === 'ready') Store.set('atc.asr.auto', true); });
-  Mic.perm(); ASR.probeGpu(); document.body.classList.toggle('ptt-left', !!Store.get('atc.voice.pttLeft', false));
+  Mic.perm(); ASR.probeGpu(); LLMBench.checkCrash(); document.body.classList.toggle('ptt-left', !!Store.get('atc.voice.pttLeft', false));
   if (Store.get('atc.asr.auto', false)) setTimeout(() => ASR.load().catch(() => {}), 2500); // model used before: load it from the browser cache
   window.addEventListener('pageshow', () => Sound.onVisible());
   document.addEventListener('visibilitychange', () => {

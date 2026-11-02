@@ -23,9 +23,9 @@ Handoff and working notes for Claude. Read this file first in every session.
 src/            source (plain browser JS, no framework, no bundler; globals in load order)
 docs/           BUILD OUTPUT served by GitHub Pages (main branch, /docs). Never edit by hand.
   index.html    the whole app in one file (CSS + JS inlined)
-  asr-worker.js, mic-worklet.js   copied from src/ by build.py (workers cannot be inlined)
+  asr-worker.js, mic-worklet.js, tts-worker.js, llm-worker.js   copied from src/ by build.py (workers cannot be inlined)
   voices/       pilot voice packs: <id>.mp3 sprite (16 kHz, 32 kbps) + <id>.json index (tools/tts/packgen.py)
-  vendor/       transformers.js + onnxruntime-web WASM, pinned and verified (tools/vendor.py)
+  vendor/       transformers.js, onnxruntime-web (WASM + standalone bundle), phonemizer (espeak-ng WASM); pinned and verified (tools/vendor.py)
 tools/          build, browser tests, data generation, TTS pack generator, ASR evaluation
 .work/          gitignored: models, sherpa-onnx, raw WAV, screenshots, bundle.js
 ```
@@ -49,7 +49,13 @@ node tools/asr_eval/policy.js 'tools/asr_eval/hyp/tjs-whisper-base.en_{v}.json' 
   are not played in real time. Screenshots go to `.work/shots/`. It runs Chromium with a fake
   microphone (PTT capture) and routes `huggingface.co` model requests to `.work/models/`; the ASR
   self-test (voice pack → Whisper tiny.en WASM → parser → readback) runs only when tiny.en is there
-  (`node tools/asr_eval/browser.js tiny.en gb --limit 1` downloads it), otherwise it prints SKIP.
+  (`node tools/asr_eval/browser.js tiny.en gb --limit 1` downloads it), otherwise it prints SKIP. The
+  neural-voice check (Piper VCTK → Whisper hears "120"/"852" → spoken on the radio) needs
+  `.work/models/rhasspy/piper-voices/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx(.json)` (curl from the
+  pinned revision in `TTS_REPO`), otherwise SKIP. Before timing-sensitive drags it waits until the voice
+  models have loaded (a press held > 330 ms before moving is a vector gesture by design).
+- Playwright `route.fulfill` cannot carry files of a few hundred MB (the browser closes): test LLMs with
+  `LLMBench.localModelPath = '/models/'` (relative path) and a local HTTP server instead.
 - Python Playwright must match the preinstalled Chromium: `pip install playwright==1.63.0`
   (Chromium 1243 in `/opt/pw-browsers`; never run `playwright install`).
 - Headless audio timing is unreliable under CPU load (the fake output device renders in bursts): tests
@@ -71,14 +77,18 @@ node tools/asr_eval/policy.js 'tools/asr_eval/hyp/tjs-whisper-base.en_{v}.json' 
 | voiceparse.js | `VoiceParser` for speech: phonetic keys, fuzzy callsign matching restricted to aircraft on frequency, ambiguity check, homophone-aware number reading, confidence; `prompt(aircraft)` = Whisper decoder prompt |
 | audio.js | `Sound`: iOS-safe audio (unlock on every gesture, `navigator.audioSession` – `play-and-record` while `Mic.capturing`, silent-loop keep-alive, resume on visibility), tones, `say()` (speechSynthesis fallback), `transmit()` |
 | voicepack.js | `VoicePack`: loads `voices/<id>`, plans a phrase from the unit vocabulary (mid/end intonation variants), schedules it through a VHF radio chain (band-pass, presence, compressor, soft clip). `VP_MAP` maps airline → accent voice pool; `renderOffline()` (used by the ASR self-test) |
+| tts.js | `PilotTTS`: runtime neural pilot voices (Piper via `tts-worker.js`), `TTS_MODELS`/`TTS_VOICES` (pack voice id → model, speaker, speed), pre-synthesis of queued transmissions, playback through `VoicePack.chain`; packs and device voice are the fallbacks |
+| tts-worker.js | module worker (copied to docs/): espeak-ng phonemes (vendored phonemizer) → Piper ids → ONNX Runtime WASM (vendored standalone bundle), model files from `rhasspy/piper-voices` (pinned revision) in the Cache API, silence trim, level matched to the packs |
 | voice.js | voice control: `ASR_MODELS` (pinned Whisper repos/revisions/dtypes, read by tools), `ASR` (worker client: WebGPU→WASM fallback, progress, transcribe), `Mic` (getUserMedia → AudioWorklet, audio session switching), `Voice` (PTT state machine, keys, radio policy, self-test, stats), `pttControl()` |
 | asr-worker.js | module worker (copied to docs/): imports `vendor/transformers-4.3.2/`, Whisper load + warm-up, resample to 16 kHz, silence trim, fast log-mel, decoder prompt, greedy decoding |
 | mic-worklet.js | AudioWorkletProcessor (copied to docs/): 2048-frame blocks with peak level, `flush` |
+| llm.js | `LLMBench` and `LLM_MODELS` (pinned small instruct models): on-device benchmark for AI pilots (pilot persona, 3 non-standard questions, timings, fact check), crash detection through `atc.llm.running` |
+| llm-worker.js | module worker (copied to docs/): transformers.js `AutoModelForCausalLM`, WebGPU q4f16 or WASM q4, chat template (`enable_thinking: false`), streamer timing |
 | radar.js | `RadarView` (TopSky-like), `PanZoom`, `CommandMenu`, label menus, vector gestures (pen/long-press drag → HDG, snap to fix → DCT) |
 | ground.js | A-SMGCS ground view, `GroundTraffic`, RIMCAS, status bar, sequence list |
 | window.js | `WindowView`: canvas tower-cab view (sky, sun, clouds, stars, terrain, Prague skyline, buildings, 3D aircraft, lights, fog/LVP halo) |
 | strips.js | `StripBay` (drag strips, reorder, CLR state) |
-| tests.js | the current app is a **feature-test harness**: `TESTS` (radar, ground, strips, touch, pencil, mouse, keyboard, voices, input, voice, alerts, display, storage, perf, results) with Czech checklists, instructor actions, ATC command dock (`mountDock`, `commandLine`) |
+| tests.js | the current app is a **feature-test harness**: `TESTS` (radar, ground, strips, touch, pencil, mouse, keyboard, voices, input, voice, ai, alerts, display, storage, perf, results) with Czech checklists, instructor actions, ATC command dock (`mountDock`, `commandLine`) |
 | app.js | `App` shell: navigation, audio button, results report (incl. `voiceReport()`: backend, timings, last transcripts), PTT key hooks (capture phase), boot, frame loop |
 
 Conventions: HMI strings English; one global object per module; no external runtime dependencies
@@ -95,6 +105,10 @@ browser). Keep 120 Hz on ProMotion: cap canvas DPR (window view ≤ 1.5), batch 
   while the microphone is open (`Mic` switches it around each PTT; `Sound.unlock()` respects it).
   Unverified on the iPad: whether the switch interrupts the AudioContext or lowers playback volume
   (the voice test has a "keep microphone open" toggle to compare).
+- Bluetooth headsets (AirPods) switch to the hands-free profile when the microphone opens: measured
+  1.9 s and a call-like sound change (AirPods, 24 kHz track). After one slow or Bluetooth opening `Mic`
+  keeps the microphone open for the session (`autoKeep`), closes it in the background, and records a
+  0.3 s pre-roll so a word spoken together with the PTT press is kept.
 - A touch `pointerdown` is not a user activation (only `pointerup`/`touchend` are): the PTT button
   cannot resume a suspended AudioContext. `Voice.down()` reports AUDIO SUSPENDED instead of waiting.
 - GitHub Pages sends no COOP/COEP headers, so the page is not cross-origin isolated and ONNX Runtime
@@ -103,7 +117,25 @@ browser). Keep 120 Hz on ProMotion: cap canvas DPR (window view ≤ 1.5), batch 
 - The app used to run as a claude.ai artifact (strict CSP, no microphone). It now runs on GitHub Pages,
   so microphone, WebGPU, Workers, Cache API and cross-origin model downloads are available.
 
-## Pilot voices (done)
+## Pilot voices: runtime neural TTS (v0.5, default) with voice packs as fallback
+
+The user found the voice packs "dictated" and the numbers hard to follow (each word, each digit a
+separate fragment with final intonation). `PilotTTS` now synthesises the whole transmission at run time
+with the same Piper speakers (tts-worker.js, ONNX Runtime WASM, 1 thread on Pages): VCTK 77 MB (gb_m1,
+gb_m2, gb_f1, sc_m1, ie_m1, us_m1, au_m1, in_m1), L2-ARCTIC 77 MB (ar_m1, es_m1, ko_m1), Czech jirka
+63 MB with English phonemes (cz_m1); `rhasspy/piper-voices` revision b4e358ff…, files in the Cache API.
+Readbacks are synthesised when queued (`Comms.atc/pilot` → `PilotTTS.prepare`), so they are ready when
+the pilot answers. Lower noise/noiseW than the trained defaults keep digits steady; pace 0.98; level
+matched to the packs (voiced RMS). fr_f1/it_m1 (Kokoro) still use the packs – add Kokoro (kokoro-js or
+the ONNX model with the same phonemizer) to cover them. Test 8 has the source switch (Neurální /
+Balíčky / Jen iPad) and synthesis timings; the report has a "Neurální hlasy" line.
+Measured headless (WASM, 1 thread, container vCPU): model load 5–13 s, synthesis 1.6–4 s per
+transmission (about half the audio duration), speech about half as long as the pack version. Whisper
+base.en as an impartial listener (no prompt) got 120, 852, 270, 220, 90, runway 24, 4000, QNH 1013 and
+139 right from the neural voice, where the packs gave e.g. "speed 2-0-0", "nine, zedo"; still weak:
+"two niner zero" with the Spanish-accent speaker.
+
+### Voice packs (fallback)
 
 - Offline neural TTS (sherpa-onnx: Piper VCTK/L2-ARCTIC voices, Czech Piper voice with English
   phonemes for Czech crews, Kokoro for French/Italian) rendered into per-voice sprites of ~244
@@ -113,7 +145,16 @@ browser). Keep 120 Hz on ProMotion: cap canvas DPR (window view ≤ 1.5), batch 
   (`python3 tools/tts/packgen.py all`), rebuild. A coverage check over all phrases must find no
   missing unit.
 
-## Voice control (variant B) – implemented in v0.4, awaiting the first iPad test
+## Voice control (variant B) – v0.4, first iPad test done
+
+First iPad report (2026-11-02): WebGPU works in Safari's worker (base.en fp32/q4, model from cache
+2.9 s, ASR median 0.7 s per transmission); most failures came from the AirPods microphone opening late
+(cut callsigns, PTT released before the microphone was ready) – fixed by `autoKeep` + pre-roll. Free
+questions ("how many passengers on board") end in "say again" by design until AI pilots exist. The
+controller's own "say again" makes the last (or addressed) pilot repeat its last transmission.
+The voice-pack self-test misheard "niner zero" as "980": concatenated digits are hard to follow, for
+people and for Whisper – the reason for runtime TTS (below). A leaner decoder prompt (callsigns, ILS,
+fixes only) was worse (gb 69 %, us 63 %) than the full one (76 %, 68 %).
 
 Push-to-talk speech input, fully on-device, then grammar-constrained interpretation.
 
@@ -200,15 +241,24 @@ Finnair), ILS wording ("FIDA LS approach"), number fragments ("1 under 0"), dire
 ("direct evening" → EVEMI), "contact Rousin". The synthetic Czech accent is far worse than real
 speech; real accuracy must be measured on the iPad.
 
-## Next: AI pilots (user chose "P2 built on P1")
+## AI pilots (user chose "P2 built on P1"; order: plan A = voices first, then P1, then P2)
 
+- Step 1 (v0.5): on-device LLM benchmark, test "AI piloti – měření" (`LLMBench`, `llm-worker.js`).
+  Candidates (onnx-community, pinned revisions in `LLM_MODELS`): LFM2 350M (255 MB q4f16), Qwen3 0.6B
+  (570 MB), Gemma 3 1B (763 MB), LFM2 1.2B (760 MB). A pilot persona answers three non-standard
+  questions (persons on board, fuel endurance, destination); the report lists load time, warm-up, time to
+  first token, tokens/s, answers and a fact check, plus "stránka spadla" when Safari killed the page during
+  a run (flag `atc.llm.running`). The user should run it with Whisper and the neural voices loaded.
+  Cache API may refuse files of this size (seen headless) – then the model downloads again next time.
+  WASM fallback uses q8: the WASM build of ONNX Runtime has no GatherBlockQuantized (4-bit embeddings).
+  Checked headless: LFM2 350M q4 on WebGPU (SwiftShader) loads and answers "Air France 1083, 152
+  passengers…" (timings meaningless on CPU emulation); q4f16 needs shader-f16 (the iPad has it).
 - P1 (deterministic, always available): scripted pilot initiative – initial calls, requests (direct,
-  higher/lower, weather deviation), "unable", "say again", emergencies, lost comms, go-arounds.
-- P2 (optional layer): small on-device LLM via WebGPU (e.g. Qwen2.5-0.5B/1.5B-Instruct ONNX q4f16 via
-  transformers.js, or WebLLM) producing a constrained intent (JSON) grounded in the aircraft state;
-  numbers and callsigns are validated against the sim; templates as fallback. Mind Safari memory limits.
-- Free-text pilot speech needs runtime TTS with the same voice identities (Piper via onnxruntime-web
-  + espeak-ng WASM; Kokoro for fr/it). Fixed phrases keep using the voice packs.
+  higher/lower, weather deviation), "unable", "say again", emergencies, lost comms, go-arounds; common
+  non-standard questions with facts from the sim (souls on board, fuel endurance, say heading/level/speed).
+- P2 (LLM layer, chosen from the benchmark): only for transmissions P1 does not understand; constrained
+  output (JSON intent + reply text) grounded in the aircraft state; numbers and callsigns validated against
+  the sim; "say again" when unsure; spoken by `PilotTTS`. Standard readbacks stay deterministic.
 
 ## Environment notes
 

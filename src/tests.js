@@ -279,15 +279,19 @@ const TESTS = [
   },
   {
     id: 'voices', name: 'Hlasy pilotů',
-    howto: 'Piloti teď mluví <b>vlastními hlasy z balíčků</b> s rádiovým filtrem. Co balíček neumí, řekne hlas iPadu (hybrid), počet takových případů vidíš níže. Pusť si jednotlivé posádky a pak poslouchej provoz na radaru. Přepínačem porovnáš s hlasy iPadu.',
+    howto: 'Piloti mluví <b>neurálními hlasy</b>: celá relace se syntetizuje najednou přímo v iPadu (stejní mluvčí jako dřív, ale souvislá řeč a čísla ve skupinách). Modely se stáhnou při prvním použití (VCTK 77 MB, L2-ARCTIC 77 MB, český 63 MB); do té doby a u francouzského a italského hlasu mluví <b>balíčky</b>. Pusť si posádky, přepínačem <b>Zdroj hlasu</b> porovnej neurální hlas s balíčky a pak poslouchej provoz na radaru.',
     checks: [
-      { id: 'hear', t: 'Slyším piloty vlastními hlasy (ne hlasy iPadu)', auto: () => VoicePack.stats.pack > 0 },
+      { id: 'neural', t: 'Neurální hlasy zní jako souvislá řeč, ne jako diktování', auto: () => PilotTTS.stats.tts > 0 },
+      { id: 'numbers', t: 'Čísla (hladiny, kurzy, rychlosti) jsou přehledná a srozumitelná' },
+      { id: 'hear', t: 'Slyším piloty vlastními hlasy (ne hlasy iPadu)', auto: () => VoicePack.stats.pack + PilotTTS.stats.tts > 0 },
       { id: 'accent', t: 'Přízvuky jednotlivých posádek se liší' },
       { id: 'radio', t: 'Rádiový zvuk (filtr, šum, cvaknutí) zní věrohodně' },
       { id: 'speed', t: 'Řeč je srozumitelná a nezpožďuje se' },
       { id: 'variety', t: 'Piloti neodpovídají pořád stejnou frází' },
     ],
-    auto: () => [['Načtené hlasy', VoicePack.stats.loaded.join(' ') || 'zatím žádný', VoicePack.stats.loaded.length ? 'ok' : 'warn'], ['Relace z balíčků', String(VoicePack.stats.pack)], ['Hlasem iPadu (záloha)', String(VoicePack.stats.device)], ['Chybějící slova', Object.keys(VoicePack.stats.missing).join(' ') || '–'], ['Chyba načtení', VoicePack.stats.lastErr || '–', VoicePack.stats.loadErr ? 'bad' : ''], ['Poslední hlas', Sound.lastVoiceUsed || '–']],
+    auto: () => [['Neurální modely', PilotTTS.label(), Object.values(PilotTTS.models).some(s => s.state === 'ready') ? 'ok' : Object.values(PilotTTS.models).some(s => s.state === 'error') ? 'bad' : 'warn'],
+      ['Neurální relace', `${PilotTTS.stats.tts}${PilotTTS.median('ms') !== null ? ` · syntéza medián ${PilotTTS.median('ms')} ms (${PilotTTS.median('rtf').toFixed(2)}× délky)` : ''}`], ['Chyba syntézy', PilotTTS.stats.lastErr || '–', PilotTTS.stats.lastErr ? 'bad' : ''],
+      ['Načtené balíčky', VoicePack.stats.loaded.join(' ') || 'zatím žádný', VoicePack.stats.loaded.length ? 'ok' : 'warn'], ['Relace z balíčků', String(VoicePack.stats.pack)], ['Hlasem iPadu (záloha)', String(VoicePack.stats.device)], ['Chybějící slova', Object.keys(VoicePack.stats.missing).join(' ') || '–'], ['Chyba načtení', VoicePack.stats.lastErr || '–', VoicePack.stats.loadErr ? 'bad' : ''], ['Poslední hlas', Sound.lastVoiceUsed || '–']],
     mount(v) {
       const page = el('div', { class: 'panel-page' }); v.append(page);
       const grid = el('div', { class: 'voice-grid' });
@@ -297,20 +301,23 @@ const TESTS = [
       const render = () => {
         grid.innerHTML = '';
         for (const [cs, name] of samples) {
-          const vv = VoicePack.voiceFor(cs); const pk = VoicePack.packs[vv.id];
+          const vv = VoicePack.voiceFor(cs); const pk = VoicePack.packs[vv.id]; const sp = PilotTTS.spec(cs); const ms = sp && PilotTTS.models[sp.model];
           const b = el('button', { class: 'btn', onclick: () => { Sound.unlock(); const ac = { cs, alt: 9000, ias: 250, wtc: /UAE|QTR|KAL|DAL/.test(cs) ? 'H' : 'M' }; const rb = Phrase.readback(ac, cmdSets[n++ % cmdSets.length], App.sim); Sound.transmit(rb.say, cs).then(() => setTimeout(() => { render(); App.refreshChecks(); }, 50)); } },
-            el('span', { text: `${name} (${cs})` }), el('small', { text: `${VP_LABEL[vv.id] || vv.id}${pk ? '' : ' · načítá se'}` }));
+            el('span', { text: `${name} (${cs})` }), el('small', { text: `${VP_LABEL[vv.id] || vv.id} · ${!PilotTTS.enabled || !sp ? (pk ? 'balíček' : 'balíček se načítá') : ms && ms.state === 'ready' ? 'neurální' : 'neurální se načítá'}` }));
           grid.append(b);
         }
       };
-      render(); App.on('voicepack', render); App.on('audio', render);
-      const mode = el('div', { class: 'seg-row', role: 'group', 'aria-label': 'Hlasy pilotů' });
-      const setMode = (on) => { VoicePack.enabled = on; [...mode.children].forEach((b, i) => b.setAttribute('aria-pressed', String(i === 0 ? on : !on))); };
-      mode.append(el('button', { onclick: () => setMode(true) }, 'Balíčky (hybrid)'), el('button', { onclick: () => setMode(false) }, 'Jen hlasy iPadu'), el('button', { onclick: () => { Sound.unlock(); VoicePack.preload(samples.map(s => s[0])); } }, 'Načíst vše'));
-      setMode(VoicePack.enabled);
+      render(); App.on('voicepack', render); App.on('audio', render); App.on('tts', render);
+      const mode = el('div', { class: 'seg-row', role: 'group', 'aria-label': 'Zdroj hlasu' });
+      const modes = [['neural', 'Neurální'], ['pack', 'Balíčky'], ['device', 'Jen iPad']];
+      const cur = () => PilotTTS.enabled ? 'neural' : VoicePack.enabled ? 'pack' : 'device';
+      const setMode = (k) => { PilotTTS.enabled = k === 'neural'; VoicePack.enabled = k !== 'device'; Store.set('atc.tts.on', PilotTTS.enabled); if (PilotTTS.enabled) { Sound.unlock(); PilotTTS.preload(samples.map(s => s[0])); } [...mode.children].forEach((b, i) => b.setAttribute('aria-pressed', String(modes[i][0] === k))); render(); };
+      for (const [k, t] of modes) mode.append(el('button', { onclick: () => setMode(k) }, t));
+      const loadAll = el('button', { class: 'btn', onclick: () => { Sound.unlock(); VoicePack.preload(samples.map(s => s[0])); PilotTTS.preload(samples.map(s => s[0])); } }, 'Načíst všechny hlasy');
+      setMode(cur());
       const rr = (label, min, max, step, val, fn, fmt) => { const id = 'r-' + label.replace(/\W/g, ''); const inp = el('input', { type: 'range', min, max, step, value: val, id }); const out = el('output', { for: id, text: fmt(val) }); inp.addEventListener('input', () => { fn(+inp.value); out.textContent = fmt(+inp.value); }); return el('div', { class: 'range-row' }, el('label', { for: id, text: label }), inp, out); };
       page.append(el('div', { class: 'card' }, el('h3', { text: 'Posádky' }), el('p', { class: 'howto', text: 'Každé klepnutí přehraje jiný typ zpětného čtení. Pod názvem je hlas, který posádka dostala.' }), grid),
-        el('div', { class: 'card' }, el('h3', { text: 'Zdroj hlasu' }), mode),
+        el('div', { class: 'card' }, el('h3', { text: 'Zdroj hlasu' }), mode, loadAll),
         el('div', { class: 'card' }, el('h3', { text: 'Nastavení zvuku' }), rr('Hlasitost', 0, 1, 0.05, Sound.vol, x => Sound.vol = x, x => Math.round(x * 100) + ' %'), rr('Rychlost řeči', 0.8, 1.25, 0.05, Sound.rateMul, x => Sound.rateMul = x, x => x.toFixed(2) + '×'), rr('Hlasitost šumu', 0, 0.15, 0.01, Sound.noiseVol, x => Sound.noiseVol = x, x => Math.round(x * 100))));
     },
   },
@@ -396,6 +403,37 @@ const TESTS = [
       ASR.probeGpu(); Mic.perm();
     },
     draw(now) { this.view.draw(now); },
+  },
+  {
+    id: 'ai', name: 'AI piloti – měření',
+    howto: 'Příprava AI pilotů: změří se, jestli se malý jazykový model vejde do iPadu vedle rozpoznávání řeči a neurálních hlasů a jak rychle odpovídá. Vyber model, klepni na <b>Spustit měření</b> a počkej na stažení (velikost je u volby) a tři odpovědi pilota na nestandardní otázky. Realistické zatížení: nejdřív načti Whisper v testu Hlasové ovládání a pusť pár relací pilotů. Měř od nejmenšího modelu. Kdyby se aplikace během měření znovu načetla (Safari ji ukončí, když dojde paměť), zapíše se to do výsledků.',
+    checks: [
+      { id: 'runs', t: 'Model se stáhne, načte a odpovídá', auto: () => LLMBench.results.some(r => !r.err && r.answers && r.answers.length) },
+      { id: 'sense', t: 'Odpovědi dávají smysl, jsou krátké a končí volacím znakem' },
+      { id: 'fast', t: 'Odpověď přijde dost rychle (první token do 1 s)' },
+      { id: 'stable', t: 'Aplikace nespadla ani s načteným Whisperem a hlasy', auto: () => LLMBench.results.some(r => !r.err) && !LLMBench.results.some(r => /spadla/.test(r.err || '')) },
+    ],
+    auto: () => [['Stav', LLMBench.state === 'loading' ? `stahuje a načítá ${Math.round(LLMBench.progress() * 100)} %` : LLMBench.state === 'running' ? 'odpovídá…' : LLMBench.state === 'error' ? 'chyba: ' + LLMBench.err : LLMBench.state === 'ready' ? 'hotovo' : '–', LLMBench.state === 'error' ? 'bad' : LLMBench.state === 'ready' ? 'ok' : ''],
+      ['WebGPU', ASR.gpu ? (ASR.gpu.ok ? 'ano' + (ASR.gpu.f16 ? ' · f16' : '') : 'ne') : '–'], ['Whisper načten', ASR.state === 'ready' ? ASR.label() : 'ne'], ['Neurální hlasy', PilotTTS.label()],
+      ['Pád při měření', LLMBench.crashed ? `ano (${(LLM_MODELS[LLMBench.crashed.model] || {}).label || LLMBench.crashed.model})` : 'ne', LLMBench.crashed ? 'bad' : '']],
+    actions(box) {
+      const r = el('div', { class: 'seg-row', role: 'group', 'aria-label': 'Model' });
+      for (const [k, M] of Object.entries(LLM_MODELS)) r.append(el('button', { 'aria-pressed': String(LLMBench.key === k), onclick: () => { LLMBench.setKey(k); App.renderChecks(); } }, el('span', {}, M.label, el('br'), el('small', { text: `${M.mb.webgpu} MB` }))));
+      box.append(el('div', { class: 'label-sm', text: 'Model (stažení přes WebGPU)' }), r,
+        el('div', { class: 'btn-row' }, el('button', { class: 'btn primary', onclick: () => { LLMBench.run().then((x) => x && toast(x.err ? 'Měření selhalo: ' + x.err : 'Měření hotovo.', 4000)); } }, 'Spustit měření'), el('button', { class: 'btn', onclick: () => LLMBench.unload() }, 'Uvolnit model')));
+    },
+    mount(v) {
+      const page = el('div', { class: 'panel-page' }); v.append(page); const card = el('div', { class: 'card' }); page.append(card);
+      const render = () => {
+        card.innerHTML = ''; card.append(el('h3', { text: 'Výsledky měření' }));
+        if (!LLMBench.results.length) card.append(el('p', { class: 'howto', text: 'Zatím nic nebylo změřeno.' }));
+        for (const r of LLMBench.results) {
+          card.append(el('p', { class: 'llm-line', text: LLMBench.line(r) }));
+          for (const a of r.answers || []) card.append(el('div', { class: 'vrow' + (a.ok ? '' : ' warn') }, el('span', { text: a.ttft + ' ms' }), el('span', { text: a.tps + ' t/s' }), el('span', { text: a.total + ' ms' }), el('span', { class: 'heard', text: 'ATC: ' + a.q }), el('span', { text: 'PILOT: ' + a.text })));
+        }
+      };
+      App.on('llm', render); render(); ASR.probeGpu();
+    },
   },
   {
     id: 'alerts', name: 'Výstražné zvuky',
