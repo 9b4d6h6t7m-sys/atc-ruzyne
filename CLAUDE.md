@@ -25,7 +25,7 @@ docs/           BUILD OUTPUT served by GitHub Pages (main branch, /docs). Never 
   index.html    the whole app in one file (CSS + JS inlined)
   voices/       pilot voice packs: <id>.mp3 sprite (16 kHz, 32 kbps) + <id>.json index
 tools/          build, browser tests, data generation, TTS pack generator, ASR evaluation
-.work/          gitignored: models, sherpa-onnx, eval audio, screenshots, bundle.js
+.work/          gitignored: models, sherpa-onnx, raw WAV, screenshots, bundle.js
 ```
 
 Site: https://9b4d6h6t7m-sys.github.io/atc-ruzyne/ (Pages must be set to `main` + `/docs`).
@@ -107,8 +107,11 @@ Push-to-talk speech input, fully on-device, then grammar-constrained interpretat
 5. Diagnostics test page: mic permission, model download progress, WebGPU availability, latency,
    last transcripts.
 
-Offline evaluation (`tools/asr_eval/`): 160 synthetic controller transmissions, synthesised with
-three voices, transcribed by Whisper base.en (sherpa-onnx), scored with the game's parser.
+Offline evaluation (`tools/asr_eval/`): 160 synthetic controller transmissions (`dataset.json`:
+id, callsign, expected commands, spoken text), synthesised with three voices (`audio/<cz|gb|us>/<id>.mp3`,
+16 kHz mono), transcribed by Whisper base.en via sherpa-onnx (`hyp/whisper-base.en_<v>.json`, the
+baseline), scored with the game's parser (`eval.js`; `HYP=<pattern with {v}>` scores other transcripts).
+The audio lets any new ASR path (e.g. transformers.js in headless Chromium) be compared on the same input.
 Current whole-transmission accuracy: gb 57 %, us 55 %, cz (synthetic Czech accent) 9 %; wrong
 aircraft ≤ 1. Remaining failures: mangled telephony (Ryanair, Skytravel, Aegean, Qatari, Turkish,
 Vueling, Finnair), ILS wording ("FIDA LS approach"), number fragments ("1 under 0"), direct-to fixes
@@ -129,5 +132,9 @@ real accuracy must be measured on the iPad.
 
 - Claude Code cloud environment for this repo should allow, besides the default package registries:
   `huggingface.co`, `*.huggingface.co`, `*.hf.co`, `cdn.jsdelivr.net` (models and library builds).
-- GitHub release assets (sherpa-onnx) are used by `tools/setup_work.sh`.
+- GitHub release assets (sherpa-onnx) are used by `tools/setup_work.sh`. In Claude Code cloud
+  sessions the GitHub proxy may only serve repositories attached to the session; if those downloads
+  return 403, use `pip install sherpa-onnx` and the same models from Hugging Face mirrors instead.
+- Headless Chromium on Linux does not reproduce iPad Safari (WebGPU, microphone permission, audio
+  session). Test the WASM path headless; WebGPU and mic behaviour must be confirmed by the user on the iPad.
 - Commit messages: short imperative summary; keep the attribution trailer the session provides.
