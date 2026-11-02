@@ -1,0 +1,6 @@
+# heavy local assets: speech models, sherpa-onnx, eval audio, screenshots, bundle
+.work/
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
