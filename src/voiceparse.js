@@ -188,7 +188,15 @@ const VoiceParser = (() => {
   function prompt(aircraft, opts = {}) {
     const calls = aircraft.slice(0, 10).map(a => `${telWritten(a.cs)} ${a.cs.slice(3)}`); // with 8 fixes about 110 tokens
     const fixes = [...new Set([...(opts.fixes || []), ...aircraft.flatMap(a => (a.route || []).slice(a.routeIdx || 0))])].filter(f => FIX[f] && f.length === 5).slice(0, 8).map(f => f[0] + f.slice(1).toLowerCase());
-    return `Praha Radar, ${calls.join(', ')}. Descend flight level, turn left heading, reduce speed, cleared ILS approach runway ${opts.rwy || '24'}${fixes.length ? ', direct ' + fixes.join(', ') : ''}, contact Ruzyne Tower.`;
+    const fx = fixes.length ? ', direct ' + fixes.join(', ') : '';
+    if (opts.style === 'calls') return `Praha Radar, ${calls.join(', ')}.${fixes.length ? ' ' + fixes.join(', ') + '.' : ''}`;
+    if (opts.style === 'lean') return `Praha Radar, ${calls.join(', ')}. Cleared ILS approach runway ${opts.rwy || '24'}${fx}, contact Ruzyne Tower.`;
+    return `Praha Radar, ${calls.join(', ')}. Descend flight level, turn left heading, reduce speed, cleared ILS approach runway ${opts.rwy || '24'}${fx}, contact Ruzyne Tower.`;
   }
-  return { parse, tokens, phon, sim, readDigits, callsign, instructions, prompt };
+  /* Controller's "say again" (Whisper: "say again", "Oh, again?", "set again"): short transmission ending in "again". */
+  function isSayAgain(T) {
+    const i = T.lastIndexOf('again'); if (i < 0 && !find(T, 0, T.length, 'say again', 0.8)) return false;
+    return T.filter(w => !FILLERS.has(w)).length <= 7;
+  }
+  return { parse, tokens, phon, sim, readDigits, callsign, instructions, prompt, isSayAgain };
 })();

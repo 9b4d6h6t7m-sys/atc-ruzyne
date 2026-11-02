@@ -233,6 +233,8 @@ class Comms {
     this.queue.push({ ac, due: this.sim.t + (opts.delay ?? rnd(1.4, 3.0)), text: rb.text, say: rb.say, apply: () => cmds.forEach(c => ac.command(c, this.sim)) });
   }
   pilot(ac, text, say, delay = 0) { this.queue.push({ ac, due: this.sim.t + delay, text, say, call: true }); }
+  /* Last pilot transmission (of one aircraft, or on the frequency), for "say again". */
+  lastPilot(ac) { const l = ac ? ac.lastTx : this.lastTx; return l && !l.ac.done ? l : null; }
   /* Controller push-to-talk: the frequency is busy, no pilot starts transmitting meanwhile. */
   txOn() { this.atcTx = true; }
   txOff() { this.atcTx = false; }
@@ -243,6 +245,7 @@ class Comms {
     if (q.apply) q.apply();
     if (q.ac && q.ac.done && !q.call) return;
     this.log('plt', q.text);
+    if (q.ac) { this.lastTx = { ac: q.ac, text: q.text, say: q.say }; q.ac.lastTx = this.lastTx; } // for the controller's "say again"
     if (q.call) Sound.tone('call');
     if (App.fastRadio) return; // test hook: no real-time audio, the radio is free immediately
     this.speaking = true;

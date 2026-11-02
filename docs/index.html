@@ -897,6 +897,8 @@ class Comms {
     this.queue.push({ ac, due: this.sim.t + (opts.delay ?? rnd(1.4, 3.0)), text: rb.text, say: rb.say, apply: () => cmds.forEach(c => ac.command(c, this.sim)) });
   }
   pilot(ac, text, say, delay = 0) { this.queue.push({ ac, due: this.sim.t + delay, text, say, call: true }); }
+  /* Last pilot transmission (of one aircraft, or on the frequency), for "say again". */
+  lastPilot(ac) { const l = ac ? ac.lastTx : this.lastTx; return l && !l.ac.done ? l : null; }
   /* Controller push-to-talk: the frequency is busy, no pilot starts transmitting meanwhile. */
   txOn() { this.atcTx = true; }
   txOff() { this.atcTx = false; }
@@ -907,6 +909,7 @@ class Comms {
     if (q.apply) q.apply();
     if (q.ac && q.ac.done && !q.call) return;
     this.log('plt', q.text);
+    if (q.ac) { this.lastTx = { ac: q.ac, text: q.text, say: q.say }; q.ac.lastTx = this.lastTx; } // for the controller's "say again"
     if (q.call) Sound.tone('call');
     if (App.fastRadio) return; // test hook: no real-time audio, the radio is free immediately
     this.speaking = true;
@@ -1106,9 +1109,17 @@ const VoiceParser = (() => {
   function prompt(aircraft, opts = {}) {
     const calls = aircraft.slice(0, 10).map(a => `${telWritten(a.cs)} ${a.cs.slice(3)}`); // with 8 fixes about 110 tokens
     const fixes = [...new Set([...(opts.fixes || []), ...aircraft.flatMap(a => (a.route || []).slice(a.routeIdx || 0))])].filter(f => FIX[f] && f.length === 5).slice(0, 8).map(f => f[0] + f.slice(1).toLowerCase());
-    return `Praha Radar, ${calls.join(', ')}. Descend flight level, turn left heading, reduce speed, cleared ILS approach runway ${opts.rwy || '24'}${fixes.length ? ', direct ' + fixes.join(', ') : ''}, contact Ruzyne Tower.`;
+    const fx = fixes.length ? ', direct ' + fixes.join(', ') : '';
+    if (opts.style === 'calls') return `Praha Radar, ${calls.join(', ')}.${fixes.length ? ' ' + fixes.join(', ') + '.' : ''}`;
+    if (opts.style === 'lean') return `Praha Radar, ${calls.join(', ')}. Cleared ILS approach runway ${opts.rwy || '24'}${fx}, contact Ruzyne Tower.`;
+    return `Praha Radar, ${calls.join(', ')}. Descend flight level, turn left heading, reduce speed, cleared ILS approach runway ${opts.rwy || '24'}${fx}, contact Ruzyne Tower.`;
   }
-  return { parse, tokens, phon, sim, readDigits, callsign, instructions, prompt };
+  /* Controller's "say again" (Whisper: "say again", "Oh, again?", "set again"): short transmission ending in "again". */
+  function isSayAgain(T) {
+    const i = T.lastIndexOf('again'); if (i < 0 && !find(T, 0, T.length, 'say again', 0.8)) return false;
+    return T.filter(w => !FILLERS.has(w)).length <= 7;
+  }
+  return { parse, tokens, phon, sim, readDigits, callsign, instructions, prompt, isSayAgain };
 })();
 
 /* ---- audio.js ---- */
@@ -1486,9 +1497,14 @@ const ASR = {
 };
 
 /* ---------- microphone: getUserMedia -> AudioWorklet (docs/mic-worklet.js) ---------- */
+const MIC_PREROLL = 0.3; // seconds of audio kept from before the PTT press while the microphone stays open
 const Mic = {
-  stream: null, src: null, node: null, sink: null, chunks: [], n: 0, rec: false, level: 0, t0: 0, flushed: null, workletCtx: null,
+  stream: null, src: null, node: null, sink: null, chunks: [], n: 0, rec: false, level: 0, t0: 0, flushed: null, workletCtx: null, pre: [], preN: 0,
   keepOpen: Store.get('atc.mic.keepOpen', false), capturing: false,
+  /* Bluetooth headsets (AirPods) switch to the hands-free profile when the microphone opens: ~2 s, call-like sound.
+     After one slow or Bluetooth opening the microphone stays open for the session (one switch, instant PTT). */
+  autoKeep: '',
+  get stayOpen() { return this.keepOpen || !!this.autoKeep; },
   processing: Store.get('atc.mic.processing', true), // echo cancellation, noise suppression, AGC (iOS voice-processing I/O: may duck playback)
   diag: { perm: '–', opens: 0, openMs: 0, rate: 0, track: '–', session: '–', err: '', blocks: 0 },
   async perm() {
@@ -1530,14 +1546,20 @@ const Mic = {
     this.diag.track = `${(tr && tr.label) || 'mikrofon'} · ${st.sampleRate || c.sampleRate} Hz${st.echoCancellation ? ' · EC' : ''}${st.noiseSuppression ? ' · NS' : ''}${st.autoGainControl ? ' · AGC' : ''}`;
     this.diag.rate = c.sampleRate; this.diag.opens++; this.diag.openMs = Math.round(performance.now() - t0);
     if (tr) tr.onended = () => { this.close(); App.emit('voice'); };
+    const bt = /airpods|bluetooth|headset|hands-?free|beats|buds|jabra|bose|sony wh|wf-/i.test((tr && tr.label) || '');
+    if (!this.keepOpen && !this.autoKeep && !this.noAuto && (bt || this.diag.openMs > 600)) {
+      this.autoKeep = bt ? 'Bluetooth' : `otevření ${this.diag.openMs} ms`;
+      toast(`Mikrofon (${this.autoKeep}) zůstane otevřený, další PTT bude okamžité. Sluchátka se přepnou do hovorového režimu jen jednou.`, 5000);
+    }
   },
   onmsg(m) {
     if (m.samples) {
       this.diag.blocks++; this.level = Math.max(m.peak, this.level * 0.7);
       if (this.rec) { this.chunks.push(m.samples); this.n += m.samples.length; if (this.n > this.diag.rate * 30 && this.onLimit) this.onLimit(); }
+      else { this.pre.push(m.samples); this.preN += m.samples.length; while (this.pre.length > 1 && this.preN - this.pre[0].length >= this.diag.rate * MIC_PREROLL) this.preN -= this.pre.shift().length; }
     } else if (m.flushed && this.flushed) { const f = this.flushed; this.flushed = null; f(); }
   },
-  start() { this.chunks = []; this.n = 0; this.rec = true; this.t0 = performance.now(); },
+  start() { this.chunks = this.pre; this.n = this.preN; this.pre = []; this.preN = 0; this.rec = true; this.t0 = performance.now(); }, // starts with the pre-roll
   /* Ends the recording; resolves {audio, sampleRate, ms} once the worklet has delivered its last block. */
   async stop() {
     if (!this.rec) return null;
@@ -1545,13 +1567,13 @@ const Mic = {
     this.rec = false; this.flushed = null;
     const audio = new Float32Array(this.n); let o = 0; for (const c of this.chunks) { audio.set(c, o); o += c.length; } this.chunks = [];
     const out = { audio, sampleRate: this.diag.rate || 48000, ms: Math.round(performance.now() - this.t0) };
-    if (!this.keepOpen) this.close();
+    if (!this.stayOpen) this.close();
     return out;
   },
   close() {
     try { if (this.src) this.src.disconnect(); if (this.node) { this.node.port.onmessage = null; this.node.disconnect(); } if (this.sink) this.sink.disconnect(); } catch (e) {}
     if (this.stream) this.stream.getTracks().forEach(t => t.stop());
-    this.stream = this.src = this.node = this.sink = null; this.rec = false; this.level = 0;
+    this.stream = this.src = this.node = this.sink = null; this.rec = false; this.level = 0; this.pre = []; this.preN = 0;
     if (this.capturing) { this.capturing = false; this.session('playback'); }
   },
 };
@@ -1576,15 +1598,16 @@ const Voice = {
   learn() { this.learning = true; this.emit(); toast('Stiskni pedál nebo klávesu, která bude PTT (Esc zruší).', 4000); },
   keydown(e) {
     if (this.learning) {
-      e.preventDefault(); e.stopPropagation(); this.learning = false;
+      e.preventDefault(); e.stopImmediatePropagation(); this.learning = false;
+      if (e.code === 'KeyP' || e.code === 'Space') { toast(e.code === 'KeyP' ? 'P je pauza, vyber jinou klávesu.' : 'Mezerník je PTT vždy, pedál nauč na jinou klávesu.', 4000); this.learning = true; return true; }
       if (e.key !== 'Escape') { this.set('key', { code: e.code, key: e.key }); toast(`PTT klávesa: ${e.code || e.key}`); } else this.emit();
       return true;
     }
     if (!this.isKey(e)) return false;
-    e.preventDefault(); e.stopPropagation(); if (!e.repeat) this.down(this.key && e.code === this.key.code ? 'pedal' : 'key');
+    e.preventDefault(); e.stopImmediatePropagation(); if (!e.repeat) this.down(this.key && e.code === this.key.code ? 'pedal' : 'key');
     return true;
   },
-  keyup(e) { if (!this.ptt || !this.isKey(e)) return false; e.preventDefault(); e.stopPropagation(); this.up(); return true; },
+  keyup(e) { if (!this.ptt || !this.isKey(e)) return false; e.preventDefault(); e.stopImmediatePropagation(); this.up(); return true; },
   async down(src) {
     if (this.ptt) return;
     const gen = ++this.gen; this.ptt = true; this.src = src; this.stats.src[src] = (this.stats.src[src] || 0) + 1; App.feature('ptt', src);
@@ -1595,9 +1618,13 @@ const Voice = {
     try { await mic; }
     catch (e) { if (gen === this.gen) { this.ptt = false; App.comms.txOff(); this.fail('MIC ' + e.message); } return; }
     if (gen !== this.gen) return; // a newer press took over
-    if (!this.ptt) { if (!Mic.keepOpen) Mic.close(); this.phase = this.pendingTx > 0 ? 'asr' : 'idle'; this.stats.cut++; this.last = { outcome: 'PTT RELEASED BEFORE THE MICROPHONE OPENED', t: App.sim.t }; this.emit(); return; }
+    if (!this.ptt) { // released before the microphone was ready: nothing was transmitted
+      if (!Mic.stayOpen) Mic.close(); this.phase = this.pendingTx > 0 ? 'asr' : 'idle'; this.stats.cut++; this.last = { outcome: 'MIC NOT READY – HOLD PTT UNTIL IT TURNS RED', t: App.sim.t };
+      if (!this.cutHint) { this.cutHint = true; toast('Mikrofon se teprve otevíral. Drž PTT, dokud tlačítko nezčervená, a teprve pak mluv.', 4500); }
+      this.emit(); return;
+    }
     if (Sound.ctx && Sound.ctx.state !== 'running') { // iOS after backgrounding: the capture graph does not run until a tap resumes audio
-      this.ptt = false; App.comms.txOff(); if (!Mic.keepOpen) Mic.close(); toast('Zvuk je pozastavený: klepni kamkoli a pak znovu stiskni PTT.', 3500); this.fail('AUDIO SUSPENDED'); return;
+      this.ptt = false; App.comms.txOff(); if (!Mic.stayOpen) Mic.close(); toast('Zvuk je pozastavený: klepni kamkoli a pak znovu stiskni PTT.', 3500); this.fail('AUDIO SUSPENDED'); return;
     }
     Mic.onLimit = () => { toast('Vysílání delší než 30 s bylo ukončeno.', 3000); this.up(); };
     Mic.start(); this.phase = 'tx'; this.emit();
@@ -1608,12 +1635,13 @@ const Voice = {
     if (this.phase !== 'tx') { App.comms.txOff(); this.emit(); return; } // still opening: down() finishes the cleanup
     const rec = await Mic.stop(); App.comms.txOff(); this.stats.tx++;
     if (!rec) { this.phase = 'idle'; this.emit(); return; }
-    if (this.blocked) { this.stats.blocked++; App.comms.log('sys', 'BLOCKED: simultaneous transmission, instruction not received'); this.done({ outcome: 'BLOCKED', dur: rec.audio.length / rec.sampleRate, t: App.sim.t }); return; }
+    const dur = rec.audio.length / rec.sampleRate; // before the buffer is transferred to the worker
+    if (this.blocked) { this.stats.blocked++; App.comms.log('sys', 'BLOCKED: simultaneous transmission, instruction not received'); this.done({ outcome: 'BLOCKED', dur, t: App.sim.t }); return; }
     this.phase = 'asr'; this.pendingTx++; this.emit();
     const aircraft = this.onFreq();
     try {
       const r = await ASR.transcribe(rec.audio, rec.sampleRate, this.usePrompt ? VoiceParser.prompt(aircraft, { rwy: this.rwy() }) : null);
-      this.pendingTx--; this.handle(r, this.onFreq(), rec.audio.length / rec.sampleRate, rec.ms);
+      this.pendingTx--; this.handle(r, this.onFreq(), dur, rec.ms);
     } catch (e) { this.pendingTx--; this.fail('ASR ' + e.message); }
   },
   fail(msg) { this.stats.errors++; if (!this.ptt) this.phase = this.pendingTx > 0 ? 'asr' : 'idle'; this.last = { outcome: msg, t: App.sim.t, err: true }; this.history.unshift(this.last); this.history.length = Math.min(this.history.length, 20); this.emit(); },
@@ -1623,6 +1651,13 @@ const Voice = {
     const res = { text, dur: +(dur || 0).toFixed(1), hold: recMs ? +(recMs / 1000).toFixed(1) : null, wall: r.wall || 0, ms: r.ms || {}, t: App.sim.t, device: ASR.device };
     if (!text || r.empty || !/[a-z0-9]/i.test(text)) { this.stats.empty++; res.outcome = 'NO SPEECH'; return this.done(res); }
     const p = VoiceParser.parse(text, aircraft); res.conf = p.conf || 0;
+    if (!p.cmds.length && !p.ambiguous && VoiceParser.isSayAgain(p.tokens || VoiceParser.tokens(text))) { // controller asks a pilot to repeat
+      const last = comms.lastPilot(p.ac || null);
+      res.outcome = last ? `${last.ac.cs} REPEATS` : 'SAY AGAIN (nothing to repeat)';
+      comms.log('atc', text, `→ ${last ? last.ac.cs + ' ' : ''}SAY AGAIN`);
+      if (last) comms.pilot(last.ac, last.text, last.say, rnd(0.8, 1.6));
+      this.stats.repeat = (this.stats.repeat || 0) + 1; return this.done(res);
+    }
     if (p.ac && p.cmds.length && p.conf >= this.minConf) {
       this.stats.ok++; res.outcome = `${p.ac.cs} ${p.cmds.map(cmdLabel).join(' ')}`;
       comms.atc(p.ac, p.cmds, { text, note: `→ ${res.outcome} · ${pct(p.conf)}`, delay: rnd(0.8, 1.8) });
@@ -3172,7 +3207,8 @@ const TESTS = [
       const learn = el('button', { class: 'btn', onclick: () => Voice.learn() }, Voice.key ? `PTT pedál: ${Voice.key.code || Voice.key.key} (naučit znovu)` : 'Naučit PTT pedál');
       const tog = (label, get, set) => el('button', { class: 'btn', 'aria-pressed': String(get()), onclick: () => { set(!get()); App.renderChecks(); } }, `${label}: ${get() ? 'ano' : 'ne'}`);
       box.append(el('div', { class: 'btn-row' }, load, self), learn,
-        tog('Mikrofon trvale otevřený', () => Mic.keepOpen, (v) => { Mic.keepOpen = v; Store.set('atc.mic.keepOpen', v); if (!v && !Voice.ptt) Mic.close(); }),
+        el('button', { class: 'btn', 'aria-pressed': String(Mic.stayOpen), onclick: () => { const on = !Mic.stayOpen; Mic.keepOpen = on; Store.set('atc.mic.keepOpen', on); if (!on) { Mic.autoKeep = ''; Mic.noAuto = true; if (!Voice.ptt) Mic.close(); } App.renderChecks(); } },
+          `Mikrofon trvale otevřený: ${Mic.keepOpen ? 'ano' : Mic.autoKeep ? 'auto (' + Mic.autoKeep + ')' : 'ne'}`),
         tog('Potlačení ozvěny a šumu, AGC', () => Mic.processing, (v) => { Mic.processing = v; Store.set('atc.mic.processing', v); if (!Voice.ptt) Mic.close(); }),
         tog('Prompt s volacími znaky', () => Voice.usePrompt, (v) => Voice.set('usePrompt', v)),
         tog('PTT tlačítko vlevo', () => document.body.classList.contains('ptt-left'), (v) => { document.body.classList.toggle('ptt-left', v); Store.set('atc.voice.pttLeft', v); }));
@@ -3419,8 +3455,8 @@ App.resultText = function () {
 function voiceReport() {
   const st = Voice.stats, i = ASR.info || {}, g = ASR.gpu, lat = Voice.latencies();
   const L = [`Hlasové ovládání: model ${ASR.label()}${ASR.fallback ? ` (WebGPU selhalo: ${ASR.fallback})` : ''}, WebGPU ${g ? (g.ok ? 'ano ' + g.desc + (g.f16 ? ' f16' : '') : 'ne (' + g.why + ')') : '–'}, načtení ${i.loadMs ? (i.loadMs / 1000).toFixed(1) + ' s' : '–'}, zahřátí ${i.warmMs ? (i.warmMs / 1000).toFixed(1) + ' s' : '–'}, prompt ${Voice.usePrompt ? 'ano' : 'ne'}`,
-    `Mikrofon: ${Mic.diag.perm}, ${Mic.diag.track}, otevření ${Mic.diag.openMs} ms (${Mic.diag.opens}×), trvale otevřený ${Mic.keepOpen ? 'ano' : 'ne'}, EC/NS/AGC ${Mic.processing ? 'ano' : 'ne'}, audioSession ${Mic.diag.session}${Mic.diag.err ? ', chyba ' + Mic.diag.err : ''}; PTT ${Object.entries(st.src).map(([k, v]) => k + ' ' + v).join(', ') || '–'}${Voice.key ? ', pedál ' + (Voice.key.code || Voice.key.key) : ''}`,
-    `Relace: ${st.tx}, provedeno ${st.ok}, say again ${st.sayAgain}, nejasný znak ${st.ambiguous}, bez znaku ${st.noCs}, ticho ${st.empty}, blokováno ${st.blocked}, PTT puštěno před otevřením mikrofonu ${st.cut}, chyby ${st.errors}, samotest ${Voice.selfOk || 0}/${st.selfTests || 0}; odezva ASR medián ${lat.length ? lat[Math.floor(lat.length / 2)] + ' ms' : '–'}`];
+    `Mikrofon: ${Mic.diag.perm}, ${Mic.diag.track}, otevření ${Mic.diag.openMs} ms (${Mic.diag.opens}×), trvale otevřený ${Mic.keepOpen ? 'ano' : Mic.autoKeep ? 'auto (' + Mic.autoKeep + ')' : 'ne'}, EC/NS/AGC ${Mic.processing ? 'ano' : 'ne'}, audioSession ${Mic.diag.session}${Mic.diag.err ? ', chyba ' + Mic.diag.err : ''}; PTT ${Object.entries(st.src).map(([k, v]) => k + ' ' + v).join(', ') || '–'}${Voice.key ? ', pedál ' + (Voice.key.code || Voice.key.key) : ''}`,
+    `Relace: ${st.tx}, provedeno ${st.ok}, say again ${st.sayAgain}, opakování na žádost ${st.repeat || 0}, nejasný znak ${st.ambiguous}, bez znaku ${st.noCs}, ticho ${st.empty}, blokováno ${st.blocked}, PTT puštěno před otevřením mikrofonu ${st.cut}, chyby ${st.errors}, samotest ${Voice.selfOk || 0}/${st.selfTests || 0}; odezva ASR medián ${lat.length ? lat[Math.floor(lat.length / 2)] + ' ms' : '–'}`];
   // per transmission: audio length / PTT hold time, ASR wall time (features + decoder), transcript, outcome
   for (const h of Voice.history.slice(0, 12)) L.push(`  ${hhmmss(h.t || 0)} ${h.dur ? h.dur.toFixed(1) + (h.hold ? '/' + h.hold.toFixed(1) : '') + ' s' : ''} ${h.wall ? h.wall + ' ms' + (h.ms && h.ms.gen ? ` (${h.ms.feat}+${h.ms.gen})` : '') : ''} "${h.text || ''}" -> ${h.outcome || ''}${h.conf ? ' (' + Math.round(h.conf * 100) + ' %)' : ''}`);
   return L;
@@ -3505,7 +3541,7 @@ function boot() {
   if (Store.get('atc.asr.auto', false)) setTimeout(() => ASR.load().catch(() => {}), 2500); // model used before: load it from the browser cache
   window.addEventListener('pageshow', () => Sound.onVisible());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { App.hiddenCount++; Voice.up(); if (!App.paused) { setSpeed(0); App.autoPaused = true; } Sound.onHidden(); return; }
+    if (document.hidden) { App.hiddenCount++; Voice.up(); if (!Voice.ptt) Mic.close(); /* release the microphone (and the headset's call mode) in the background */ if (!App.paused) { setSpeed(0); App.autoPaused = true; } Sound.onHidden(); return; }
     Sound.onVisible();
     if (App.autoPaused) { App.autoPaused = false; toast('Simulace se pozastavila, když byla aplikace na pozadí. Pokračuj tlačítkem 1×. Zvuk se obnoví prvním klepnutím.', 4200); App.refreshChecks(); }
   });

@@ -131,8 +131,8 @@ App.resultText = function () {
 function voiceReport() {
   const st = Voice.stats, i = ASR.info || {}, g = ASR.gpu, lat = Voice.latencies();
   const L = [`Hlasové ovládání: model ${ASR.label()}${ASR.fallback ? ` (WebGPU selhalo: ${ASR.fallback})` : ''}, WebGPU ${g ? (g.ok ? 'ano ' + g.desc + (g.f16 ? ' f16' : '') : 'ne (' + g.why + ')') : '–'}, načtení ${i.loadMs ? (i.loadMs / 1000).toFixed(1) + ' s' : '–'}, zahřátí ${i.warmMs ? (i.warmMs / 1000).toFixed(1) + ' s' : '–'}, prompt ${Voice.usePrompt ? 'ano' : 'ne'}`,
-    `Mikrofon: ${Mic.diag.perm}, ${Mic.diag.track}, otevření ${Mic.diag.openMs} ms (${Mic.diag.opens}×), trvale otevřený ${Mic.keepOpen ? 'ano' : 'ne'}, EC/NS/AGC ${Mic.processing ? 'ano' : 'ne'}, audioSession ${Mic.diag.session}${Mic.diag.err ? ', chyba ' + Mic.diag.err : ''}; PTT ${Object.entries(st.src).map(([k, v]) => k + ' ' + v).join(', ') || '–'}${Voice.key ? ', pedál ' + (Voice.key.code || Voice.key.key) : ''}`,
-    `Relace: ${st.tx}, provedeno ${st.ok}, say again ${st.sayAgain}, nejasný znak ${st.ambiguous}, bez znaku ${st.noCs}, ticho ${st.empty}, blokováno ${st.blocked}, PTT puštěno před otevřením mikrofonu ${st.cut}, chyby ${st.errors}, samotest ${Voice.selfOk || 0}/${st.selfTests || 0}; odezva ASR medián ${lat.length ? lat[Math.floor(lat.length / 2)] + ' ms' : '–'}`];
+    `Mikrofon: ${Mic.diag.perm}, ${Mic.diag.track}, otevření ${Mic.diag.openMs} ms (${Mic.diag.opens}×), trvale otevřený ${Mic.keepOpen ? 'ano' : Mic.autoKeep ? 'auto (' + Mic.autoKeep + ')' : 'ne'}, EC/NS/AGC ${Mic.processing ? 'ano' : 'ne'}, audioSession ${Mic.diag.session}${Mic.diag.err ? ', chyba ' + Mic.diag.err : ''}; PTT ${Object.entries(st.src).map(([k, v]) => k + ' ' + v).join(', ') || '–'}${Voice.key ? ', pedál ' + (Voice.key.code || Voice.key.key) : ''}`,
+    `Relace: ${st.tx}, provedeno ${st.ok}, say again ${st.sayAgain}, opakování na žádost ${st.repeat || 0}, nejasný znak ${st.ambiguous}, bez znaku ${st.noCs}, ticho ${st.empty}, blokováno ${st.blocked}, PTT puštěno před otevřením mikrofonu ${st.cut}, chyby ${st.errors}, samotest ${Voice.selfOk || 0}/${st.selfTests || 0}; odezva ASR medián ${lat.length ? lat[Math.floor(lat.length / 2)] + ' ms' : '–'}`];
   // per transmission: audio length / PTT hold time, ASR wall time (features + decoder), transcript, outcome
   for (const h of Voice.history.slice(0, 12)) L.push(`  ${hhmmss(h.t || 0)} ${h.dur ? h.dur.toFixed(1) + (h.hold ? '/' + h.hold.toFixed(1) : '') + ' s' : ''} ${h.wall ? h.wall + ' ms' + (h.ms && h.ms.gen ? ` (${h.ms.feat}+${h.ms.gen})` : '') : ''} "${h.text || ''}" -> ${h.outcome || ''}${h.conf ? ' (' + Math.round(h.conf * 100) + ' %)' : ''}`);
   return L;
@@ -217,7 +217,7 @@ function boot() {
   if (Store.get('atc.asr.auto', false)) setTimeout(() => ASR.load().catch(() => {}), 2500); // model used before: load it from the browser cache
   window.addEventListener('pageshow', () => Sound.onVisible());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { App.hiddenCount++; Voice.up(); if (!App.paused) { setSpeed(0); App.autoPaused = true; } Sound.onHidden(); return; }
+    if (document.hidden) { App.hiddenCount++; Voice.up(); if (!Voice.ptt) Mic.close(); /* release the microphone (and the headset's call mode) in the background */ if (!App.paused) { setSpeed(0); App.autoPaused = true; } Sound.onHidden(); return; }
     Sound.onVisible();
     if (App.autoPaused) { App.autoPaused = false; toast('Simulace se pozastavila, když byla aplikace na pozadí. Pokračuj tlačítkem 1×. Zvuk se obnoví prvním klepnutím.', 4200); App.refreshChecks(); }
   });

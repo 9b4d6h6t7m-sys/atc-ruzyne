@@ -373,7 +373,8 @@ const TESTS = [
       const learn = el('button', { class: 'btn', onclick: () => Voice.learn() }, Voice.key ? `PTT pedál: ${Voice.key.code || Voice.key.key} (naučit znovu)` : 'Naučit PTT pedál');
       const tog = (label, get, set) => el('button', { class: 'btn', 'aria-pressed': String(get()), onclick: () => { set(!get()); App.renderChecks(); } }, `${label}: ${get() ? 'ano' : 'ne'}`);
       box.append(el('div', { class: 'btn-row' }, load, self), learn,
-        tog('Mikrofon trvale otevřený', () => Mic.keepOpen, (v) => { Mic.keepOpen = v; Store.set('atc.mic.keepOpen', v); if (!v && !Voice.ptt) Mic.close(); }),
+        el('button', { class: 'btn', 'aria-pressed': String(Mic.stayOpen), onclick: () => { const on = !Mic.stayOpen; Mic.keepOpen = on; Store.set('atc.mic.keepOpen', on); if (!on) { Mic.autoKeep = ''; Mic.noAuto = true; if (!Voice.ptt) Mic.close(); } App.renderChecks(); } },
+          `Mikrofon trvale otevřený: ${Mic.keepOpen ? 'ano' : Mic.autoKeep ? 'auto (' + Mic.autoKeep + ')' : 'ne'}`),
         tog('Potlačení ozvěny a šumu, AGC', () => Mic.processing, (v) => { Mic.processing = v; Store.set('atc.mic.processing', v); if (!Voice.ptt) Mic.close(); }),
         tog('Prompt s volacími znaky', () => Voice.usePrompt, (v) => Voice.set('usePrompt', v)),
         tog('PTT tlačítko vlevo', () => document.body.classList.contains('ptt-left'), (v) => { document.body.classList.toggle('ptt-left', v); Store.set('atc.voice.pttLeft', v); }));

@@ -5,6 +5,7 @@
 //   --device wasm|webgpu   default wasm; webgpu runs on a SwiftShader (CPU) adapter here: correctness only, slow
 //   --dtype q8|fp32|...    default: the game's choice for the device
 //   --prompt               bias the decoder like the game does (callsigns on frequency, fixes)
+//   --prompt-style S       full (default) | lean | calls: prompt variants of VoiceParser.prompt
 //   --threads N            ONNX Runtime WASM threads (the page is cross-origin isolated here; GitHub Pages is not: 1)
 //   --limit N              only the first N transmissions per voice
 //   --remote               load the model from huggingface.co through the proxy (default: .work/models, see below)
@@ -18,7 +19,7 @@ const { load } = require('./game'); const G = load();
 const ROOT = path.join(__dirname, '../..'), WORK = process.env.ATC_WORK || path.join(ROOT, '.work');
 const args = process.argv.slice(2); const opt = (k, d) => { const i = args.indexOf(k); return i < 0 ? d : args[i + 1]; };
 const flag = (k) => args.includes(k);
-const model = args[0]; const voices = args.slice(1).filter((a, i, all) => !a.startsWith('--') && !(all[i - 1] || '').match(/^--(device|dtype|threads|limit|tag)$/));
+const model = args[0]; const voices = args.slice(1).filter((a, i, all) => !a.startsWith('--') && !(all[i - 1] || '').match(/^--(device|dtype|threads|limit|tag|prompt-style)$/));
 if (!model || !voices.length) { console.error('usage: node tools/asr_eval/browser.js <tiny.en|base.en|small.en> <voice>... [--prompt] [--device wasm] [--threads 4]'); process.exit(1); }
 
 // Model catalogue shared with the game (src/voice.js): repo, pinned revision, dtypes per device.
@@ -27,7 +28,8 @@ const MODELS = JSON.parse(src.match(/const ASR_MODELS = (\{[\s\S]*?\n\});/)[1]);
 const M = MODELS[model]; if (!M) { console.error('unknown model', model, Object.keys(MODELS)); process.exit(1); }
 const device = opt('--device', 'wasm');
 const dtype = opt('--dtype', null) ? { encoder_model: opt('--dtype'), decoder_model_merged: opt('--dtype') } : M.dtype[device];
-const tag = (flag('--prompt') ? '-prompt' : '') + (opt('--tag', '') ? '-' + opt('--tag') : '');
+const pstyle = opt('--prompt-style', null); // full (default) | lean | calls, see VoiceParser.prompt
+const tag = (flag('--prompt') ? '-prompt' + (pstyle ? '-' + pstyle : '') : '') + (opt('--tag', '') ? '-' + opt('--tag') : '');
 const limit = +opt('--limit', 0) || Infinity, threads = +opt('--threads', 4);
 
 // Local copy of the pinned model files (only what the chosen dtypes need).
@@ -87,7 +89,7 @@ function onFrequency(d, i) { let s = i * 7919 + 17; const r = () => (s = (s * 11
     const hyp = {}, timing = []; let n = 0; const t0 = Date.now();
     for (const [i, d] of data.entries()) {
       if (n++ >= limit) break;
-      const prompt = flag('--prompt') ? G.VoiceParser.prompt(onFrequency(d, i), { fixes, rwy: '24' }) : null;
+      const prompt = flag('--prompt') ? G.VoiceParser.prompt(onFrequency(d, i), { fixes, rwy: '24', style: pstyle }) : null;
       const r = await page.evaluate(async ({ url, id, prompt }) => {
         const ab = await (await fetch(url)).arrayBuffer();
         const oc = new OfflineAudioContext(1, 16000, 16000); const buf = await oc.decodeAudioData(ab);

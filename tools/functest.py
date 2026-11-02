@@ -220,6 +220,11 @@ async def main():
         check('Voice: no callsign -> say again', r['outcome'] == 'CALLSIGN ?' and any('say again' in l for l in r['log']), r)
         r = await page.evaluate(VOICE_JS, '')
         check('Voice: empty transcript is ignored', r['outcome'] == 'NO SPEECH' and not r['log'], r)
+        await page.evaluate("App.comms.pilot(App.sim.find('TVS35J'), 'request direct ERASU, Skytravel 35J', 'request direct Erasu', 0); for (let i = 0; i < 5; i++) { App.sim.step(0.1); App.comms.tick(); }")
+        r = await page.evaluate(VOICE_JS, 'Oh, again?')
+        check('Voice: controller "say again" -> last pilot repeats', r['outcome'] == 'TVS35J REPEATS' and r['log'][-1] == 'plt: request direct ERASU, Skytravel 35J', r)
+        lk = await page.evaluate("(() => { Voice.learn(); const ev = new KeyboardEvent('keydown', {code: 'KeyP', key: 'p', bubbles: true, cancelable: true}); window.dispatchEvent(ev); const still = Voice.learning; Voice.learning = false; return {still, key: Voice.key}; })()")
+        check('PTT key learning refuses P (pause)', lk['still'] and lk['key'] is None, lk)
         # ---------- push-to-talk: Space holds the frequency, fake microphone is captured, P pauses ----------
         await page.evaluate("ASR.setPref('model', 'tiny.en'); ASR.setPref('device', 'wasm')")
         await page.mouse.click(400, 300); b0 = await page.evaluate("Mic.diag.blocks"); await page.keyboard.down('Space'); await page.wait_for_timeout(400)
@@ -234,6 +239,9 @@ async def main():
         await page.evaluate("App.comms.speaking = true"); await page.keyboard.down('Space'); await page.wait_for_timeout(500); await page.keyboard.up('Space'); await page.wait_for_timeout(300)
         bl = await page.evaluate("(() => { App.comms.speaking = false; return {blocked: Voice.stats.blocked, last: App.comms.entries.slice(-1)[0].text}; })()")
         check('PTT over a pilot transmission is blocked', bl['blocked'] == 1 and bl['last'].startswith('BLOCKED'), bl)
+        await page.evaluate("Mic.keepOpen = true"); await page.keyboard.down('Space'); await page.wait_for_timeout(400); await page.keyboard.up('Space'); await page.wait_for_timeout(700)
+        pre = await page.evaluate("(() => { const r = {open: Mic.open, preSec: Mic.preN / (Mic.diag.rate || 48000)}; Mic.keepOpen = false; Mic.close(); return r; })()")
+        check('Microphone kept open fills the pre-roll buffer', pre['open'] and pre['preSec'] > 0, pre)
         p0 = await page.evaluate("App.paused"); await page.keyboard.press('p'); p1 = await page.evaluate("App.paused"); await page.keyboard.press('p')
         check('Key P toggles pause (Space is PTT)', p0 is False and p1 is True, (p0, p1))
         # ---------- speech recognition end to end: voice pack -> Whisper tiny.en (WASM) -> parser -> readback ----------
